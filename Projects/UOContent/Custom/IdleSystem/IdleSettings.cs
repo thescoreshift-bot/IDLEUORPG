@@ -73,6 +73,18 @@ public class IdleTaskDefinition
 
     /// <summary>Harvest kind: definition within the system ("OreAndStone", "Sand", "Definition").</summary>
     public string HarvestDefinition { get; set; }
+
+    /// <summary>
+    /// Harvest kind: Average = the world's vein mix (the character roams between spots as they run dry);
+    /// Target = only the vein under the chosen spot.
+    /// </summary>
+    public IdleVeinMode VeinMode { get; set; } = IdleVeinMode.Average;
+}
+
+public enum IdleVeinMode
+{
+    Average,
+    Target
 }
 
 public class IdleLocation

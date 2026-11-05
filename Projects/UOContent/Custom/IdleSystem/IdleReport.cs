@@ -7,7 +7,8 @@ namespace Server.Custom.Idle;
 public class IdleReport
 {
     public string TaskName { get; init; }
-    public bool Simulated { get; init; }
+    public IdleSettleMode Mode { get; init; }
+    public bool Simulated => Mode != IdleSettleMode.Login;
     public TimeSpan Away { get; init; }
     public TimeSpan Counted { get; init; }
     public bool Capped => Away > Counted;
@@ -21,6 +22,21 @@ public class IdleReport
     public List<IdleItemLine> Items { get; } = new();
     public List<IdleSkillLine> Skills { get; } = new();
     public List<IdleStatLine> Stats { get; } = new();
+
+    /// <summary>Which rules applied and the exact numbers, for staff simulations. Empty on real logins.</summary>
+    public List<string> Notes { get; } = new();
+}
+
+public enum IdleSettleMode
+{
+    /// <summary>A real login after offline time.</summary>
+    Login,
+
+    /// <summary>Staff simulation that applies results.</summary>
+    Simulate,
+
+    /// <summary>Staff simulation that only reports; skills, stats, tools, and items are left untouched.</summary>
+    Preview
 }
 
 public class IdleItemLine

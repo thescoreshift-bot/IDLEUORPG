@@ -1,6 +1,42 @@
 {
-  // Idle (offline progress) tasks. Each task names the code "Kind" that runs it plus its data.
-  // Locations are named spots a task can target without an in-game click.
-  "Tasks": [],
-  "Locations": []
+  // Idle (offline progress) tasks. "Kind" picks the code that runs a task; everything else is data.
+  // Harvest tasks read the live harvest tables (ores, veins, skill requirements) of the named system.
+  "Tasks": [
+    {
+      "Id": "mining",
+      "Name": "Mining",
+      "Kind": "Harvest",
+      "HarvestSystem": "Mining",
+      "HarvestDefinition": "OreAndStone",
+      // Speed multiplier on top of the global offline rate in Configuration/idle.json.
+      "Rate": 1.0,
+      // Multiplier on the normal skill gain chance, on top of the global one.
+      "SkillGainMultiplier": 1.0,
+      // One online swing plus re-targeting.
+      "SecondsPerAttempt": 2.0,
+      // A spot holds 10-34 ore. Each time one runs dry, this many seconds go to walking to the next rock.
+      "RelocateSeconds": 60,
+      // Average: the world's vein mix (the miner roams between rocks). Target: only the chosen spot's own vein.
+      "VeinMode": "Average"
+    }
+  ],
+
+  // Named spots a task can target without a click: [Idle at <Id>, or an external API.
+  // The character must stand (or have logged out) within the task's range (2 tiles for mining) of Location.
+  "Locations": [
+    {
+      "Id": "minoc-mine",
+      "Name": "Minoc Mine (cave floor by the entrance)",
+      "TaskId": "mining",
+      "Map": "Felucca",
+      "Location": { "x": 2558, "y": 499, "z": 0 }
+    },
+    {
+      "Id": "britain-mine-west",
+      "Name": "Britain Mine, west wall (stand at 1438, 1227)",
+      "TaskId": "mining",
+      "Map": "Felucca",
+      "Location": { "x": 1436, "y": 1227, "z": 10 }
+    }
+  ]
 }

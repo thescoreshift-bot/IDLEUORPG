@@ -31,7 +31,7 @@ public static class IdleSettlement
     }
 
     public static IdleReport Settle(
-        PlayerMobile pm, IdleTaskDefinition def, IdleTaskHandler handler, IdleTarget target, TimeSpan away, bool simulated
+        PlayerMobile pm, IdleTaskDefinition def, IdleTaskHandler handler, IdleTarget target, TimeSpan away, IdleSettleMode mode
     )
     {
         var settings = IdleSystem.Settings;
@@ -40,16 +40,21 @@ public static class IdleSettlement
         var report = new IdleReport
         {
             TaskName = def.Name ?? def.Id,
-            Simulated = simulated,
+            Mode = mode,
             Away = away,
             Counted = counted
         };
+
+        var notes = mode == IdleSettleMode.Login ? null : report.Notes;
 
         var skill = pm.Skills[handler.GetSkill(def)];
         if (skill == null || counted <= TimeSpan.Zero)
         {
             return report;
         }
+
+        // A preview runs the real gain code, then puts every skill and stat back.
+        var skillSnapshot = mode == IdleSettleMode.Preview ? SnapshotSkills(pm) : null;
 
         var run = handler.BeginRun(pm, def, target);
 
@@ -68,11 +73,27 @@ public static class IdleSettlement
         var budget = counted.TotalSeconds * settings.OfflineRate * def.Rate;
         var successesLeft = run.SuccessesAllowed == int.MaxValue ? double.PositiveInfinity : run.SuccessesAllowed;
 
+        if (notes != null)
+        {
+            notes.Add(
+                $"Time: {IdleSummaryGump.FormatTime(away)} away, {IdleSummaryGump.FormatTime(counted)} counted (max {IdleSummaryGump.FormatTime(settings.MaxOfflineTime)})"
+            );
+            notes.Add(
+                $"Work: {counted.TotalSeconds:N0}s x offline {settings.OfflineRate:0.##} x task {def.Rate:0.##} = {budget:N0}s of online-equivalent work"
+            );
+            notes.Add(
+                $"Skill gain: {(canGain ? "on" : "off")} (x{gainMultiplier:0.##}, region {(regionAllowsGain ? "allows" : "blocks")}, anti-macro not applied offline)"
+            );
+            run.Describe(notes);
+        }
+
         var yields = new Dictionary<Type, double>();
         var model = new IdleAttemptModel();
         double attempts = 0;
         double successes = 0;
         double statRolls = 0;
+        var gains = 0;
+        var first = true;
 
         for (var i = 0; i < MaxSegments && budget > Epsilon; i++)
         {
@@ -85,6 +106,14 @@ public static class IdleSettlement
             }
 
             var p = model.SuccessChance;
+            var gainRate = canGain ? GainChancePerAttempt(pm, skill, model) * gainMultiplier : 0;
+
+            if (first && notes != null)
+            {
+                notes.Add($"Start: {DescribeAttempt(skill, p, model.SecondsPerAttempt, gainRate)}");
+                first = false;
+            }
+
             var available = budget / model.SecondsPerAttempt;
             var suppliesLimited = false;
 
@@ -104,7 +133,6 @@ public static class IdleSettlement
                 break;
             }
 
-            var gainRate = canGain ? GainChancePerAttempt(pm, skill, model) * gainMultiplier : 0;
             var toNextGain = gainRate > 0 ? 1.0 / gainRate : double.PositiveInfinity;
             var segment = Math.Min(available, toNextGain);
 
@@ -122,9 +150,16 @@ public static class IdleSettlement
             var reachedGain = toNextGain <= available;
 
             // A final partial stretch still had a proportional chance at one more gain, which keeps the total exact on average.
-            if ((reachedGain || gainRate > 0 && Utility.RandomDouble() < segment * gainRate) && !TryGain(pm, skill))
+            if (reachedGain || gainRate > 0 && Utility.RandomDouble() < segment * gainRate)
             {
-                canGain = false; // Capped or locked: stop modelling gains, keep working.
+                if (TryGain(pm, skill))
+                {
+                    gains++;
+                }
+                else
+                {
+                    canGain = false; // Capped or locked: stop modelling gains, keep working.
+                }
             }
 
             if (!reachedGain)
@@ -140,19 +175,34 @@ public static class IdleSettlement
 
         report.Attempts = RoundRandom(attempts);
         report.Successes = Math.Min(RoundRandom(successes), run.SuccessesAllowed);
-        run.ConsumeSupplies(report.Successes);
+
+        if (notes != null)
+        {
+            model.Clear();
+            run.Evaluate(skill.Base, skill.Value, model);
+            var endGain = canGain ? GainChancePerAttempt(pm, skill, model) * gainMultiplier : 0;
+            notes.Add($"End: {DescribeAttempt(skill, model.SuccessChance, model.SecondsPerAttempt, endGain)}");
+            notes.Add($"Totals: {attempts:N1} attempts, {successes:N1} successes expected; {gains} skill gain event(s)");
+        }
+
+        if (mode != IdleSettleMode.Preview)
+        {
+            run.ConsumeSupplies(report.Successes);
+        }
 
         if (settings.SkillGain.StatGains && !_usePub45StatGain && regionAllowsGain)
         {
-            ApplyStatGains(pm, skill.Info, counted, statRolls);
+            ApplyStatGains(pm, skill.Info, counted, statRolls, notes);
         }
 
-        foreach (var (type, amount) in yields)
+        foreach (var (type, expected) in yields)
         {
-            var line = Deliver(pm, type, RoundRandom(amount));
+            var amount = RoundRandom(expected);
+            var line = Deliver(pm, type, amount, mode != IdleSettleMode.Preview);
             if (line != null)
             {
                 report.Items.Add(line);
+                notes?.Add($"Yield: {line.Name} expected {expected:N2} -> {amount:N0}");
             }
         }
 
@@ -165,7 +215,40 @@ public static class IdleSettlement
         AddStatLine(report, "Dexterity", startDex, pm.RawDex);
         AddStatLine(report, "Intelligence", startInt, pm.RawInt);
 
+        if (skillSnapshot != null)
+        {
+            RestoreSkills(pm, skillSnapshot, startStr, startDex, startInt);
+        }
+
         return report;
+    }
+
+    private static string DescribeAttempt(Skill skill, double successChance, double secondsPerAttempt, double gainRate) =>
+        $"skill {skill.Base:F1}, success {successChance:P1}, {secondsPerAttempt:F2}s/attempt, gain {gainRate:P2}/attempt";
+
+    private static int[] SnapshotSkills(PlayerMobile pm)
+    {
+        var skills = pm.Skills;
+        var values = new int[skills.Length];
+        for (var i = 0; i < values.Length; i++)
+        {
+            values[i] = skills[i].BaseFixedPoint;
+        }
+
+        return values;
+    }
+
+    private static void RestoreSkills(PlayerMobile pm, int[] values, int str, int dex, int intel)
+    {
+        var skills = pm.Skills;
+        for (var i = 0; i < values.Length; i++)
+        {
+            skills[i].BaseFixedPoint = values[i];
+        }
+
+        pm.RawStr = str;
+        pm.RawDex = dex;
+        pm.RawInt = intel;
     }
 
     /// <summary>
@@ -243,7 +326,7 @@ public static class IdleSettlement
     /// Online, a stat can rise at most once per gain delay. Each delay window gets the share of rolls made in it,
     /// and the window gains if any roll in it would have succeeded.
     /// </summary>
-    private static void ApplyStatGains(PlayerMobile pm, SkillInfo info, TimeSpan counted, double rolls)
+    private static void ApplyStatGains(PlayerMobile pm, SkillInfo info, TimeSpan counted, double rolls, List<string> notes)
     {
         if (rolls <= 0 || _statGainDelay <= TimeSpan.Zero)
         {
@@ -253,12 +336,19 @@ public static class IdleSettlement
         var windows = Math.Max(1.0, counted.TotalSeconds / _statGainDelay.TotalSeconds);
         var rollsPerWindow = rolls / windows;
 
-        GainStat(pm, Stat.Str, info.StrGain, pm.StrLock, windows, rollsPerWindow);
-        GainStat(pm, Stat.Dex, info.DexGain, pm.DexLock, windows, rollsPerWindow);
-        GainStat(pm, Stat.Int, info.IntGain, pm.IntLock, windows, rollsPerWindow);
+        notes?.Add(
+            $"Stats: {windows:N1} window(s) of {IdleSummaryGump.FormatTime(_statGainDelay)}, {rollsPerWindow:N1} rolls each (max 1 gain per stat per window)"
+        );
+
+        GainStat(pm, Stat.Str, info.StrGain, pm.StrLock, windows, rollsPerWindow, notes);
+        GainStat(pm, Stat.Dex, info.DexGain, pm.DexLock, windows, rollsPerWindow, notes);
+        GainStat(pm, Stat.Int, info.IntGain, pm.IntLock, windows, rollsPerWindow, notes);
     }
 
-    private static void GainStat(PlayerMobile pm, Stat stat, double statGain, StatLockType statLock, double windows, double rollsPerWindow)
+    private static void GainStat(
+        PlayerMobile pm, Stat stat, double statGain, StatLockType statLock, double windows, double rollsPerWindow,
+        List<string> notes
+    )
     {
         if (statGain <= 0 || statLock != StatLockType.Up)
         {
@@ -268,6 +358,8 @@ public static class IdleSettlement
         var chance = Math.Min(1.0, statGain / 33.3 * _statGainChanceMultiplier);
         var perWindow = 1.0 - Math.Pow(1.0 - chance, rollsPerWindow);
         var gains = RoundRandom(windows * perWindow);
+
+        notes?.Add($"  {stat}: {chance:P2}/roll, {perWindow:P1}/window, expected {windows * perWindow:N2} -> {gains} gain roll(s)");
 
         for (var i = 0; i < gains; i++)
         {
@@ -302,7 +394,7 @@ public static class IdleSettlement
     }
 
     /// <summary>Backpack first (respecting its weight and item limits), then bank box; the rest is lost.</summary>
-    private static IdleItemLine Deliver(PlayerMobile pm, Type type, int amount)
+    private static IdleItemLine Deliver(PlayerMobile pm, Type type, int amount, bool place)
     {
         if (amount <= 0)
         {
@@ -325,6 +417,11 @@ public static class IdleSettlement
 
         var stackable = sample.Stackable;
         sample.Delete();
+
+        if (!place)
+        {
+            return line;
+        }
 
         var remaining = stackable ? amount : Math.Min(amount, MaxNonStackable);
 

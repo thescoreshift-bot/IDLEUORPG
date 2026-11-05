@@ -28,6 +28,13 @@ public abstract class IdleTaskHandler
     /// <summary>Checks that the target spot can be worked by this task (server-side, never trusts the client).</summary>
     public abstract bool ValidateTarget(PlayerMobile pm, IdleTaskDefinition def, IdleTarget target, out string error);
 
+    /// <summary>Turns an in-game click into a target for this task. Returns false if the click does not fit the task.</summary>
+    public virtual bool TryCreateTarget(PlayerMobile pm, IdleTaskDefinition def, object targeted, out IdleTarget target)
+    {
+        target = default;
+        return false;
+    }
+
     /// <summary>Checks that the character carries what the task needs (tools, bait, reagents).</summary>
     public abstract bool HasSupplies(PlayerMobile pm, IdleTaskDefinition def, out string error);
 
@@ -49,6 +56,11 @@ public abstract class IdleTaskRun
 
     /// <summary>Applies supply wear for the successes that actually happened.</summary>
     public abstract void ConsumeSupplies(int successes);
+
+    /// <summary>Adds the task-specific rules that applied, for the staff simulation breakdown.</summary>
+    public virtual void Describe(List<string> notes)
+    {
+    }
 }
 
 /// <summary>

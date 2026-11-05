@@ -42,7 +42,6 @@ public class IdleSystem : GenericPersistence
 
     public static void Initialize()
     {
-        IdleSettlement.Initialize();
         LoadCatalog();
         EventSink.Logout += OnLogout;
     }
@@ -279,7 +278,7 @@ public class IdleSystem : GenericPersistence
             return;
         }
 
-        var report = Settle(pm, state, away, false);
+        var report = Settle(pm, state, away, IdleSettleMode.Login);
         if (report != null)
         {
             ShowReport(pm, report);
@@ -287,7 +286,7 @@ public class IdleSystem : GenericPersistence
     }
 
     /// <summary>Settles a stretch of offline time for the character's current task.</summary>
-    public static IdleReport Settle(PlayerMobile pm, IdleState state, TimeSpan away, bool simulated)
+    public static IdleReport Settle(PlayerMobile pm, IdleState state, TimeSpan away, IdleSettleMode mode)
     {
         var def = GetTask(state.TaskId);
         var handler = IdleTaskHandler.Get(def?.Kind);
@@ -297,16 +296,16 @@ public class IdleSystem : GenericPersistence
             return null;
         }
 
-        var report = IdleSettlement.Settle(pm, def, handler, state.Target, away, simulated);
+        var report = IdleSettlement.Settle(pm, def, handler, state.Target, away, mode);
 
         logger.Information(
-            "Idle settle {Player}: task {Task}, {Counted} counted, {Attempts} attempts, {Successes} successes{Sim}",
+            "Idle settle {Player}: task {Task}, {Counted} counted, {Attempts} attempts, {Successes} successes ({Mode})",
             pm,
             def.Id,
             report.Counted,
             report.Attempts,
             report.Successes,
-            simulated ? " (simulated)" : ""
+            mode
         );
 
         return report;
