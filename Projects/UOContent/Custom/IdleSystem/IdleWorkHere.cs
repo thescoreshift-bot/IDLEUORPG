@@ -328,7 +328,7 @@ public static class IdleWorkHere
     }
 
     /// <summary>Offsets within a square of the given radius, nearest to the center first. Cached per radius.</summary>
-    private static (int X, int Y)[] Offsets(int radius)
+    internal static (int X, int Y)[] Offsets(int radius)
     {
         if (_offsets.TryGetValue(radius, out var offsets))
         {

@@ -54,6 +54,7 @@ public sealed class IdleSpotGenerator
     private readonly List<HarvestTask> _harvest = [];
     private readonly List<Point3D> _forges = [];
     private readonly List<IdleSpot> _smithies = [];
+    private readonly Dictionary<string, Point3D> _smithyForges = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _rejected = new(StringComparer.Ordinal);
 
     private TimerExecutionToken _timer;
@@ -708,7 +709,8 @@ public sealed class IdleSpotGenerator
                 candidates.Add(spot);
             }
 
-            if ((i & 15) == 15)
+            // Each forge runs the station check for up to 25 tiles around it.
+            if ((i & 3) == 3)
             {
                 yield return true;
             }
@@ -760,6 +762,10 @@ public sealed class IdleSpotGenerator
         {
             Reject("smithy: no standable tile with the forge in reach");
         }
+        else
+        {
+            _smithyForges[best.Id] = forge;
+        }
 
         return best;
     }
@@ -810,11 +816,19 @@ public sealed class IdleSpotGenerator
         all.AddRange(_smithies);
 
         var kept = new List<IdleSpot>(all.Count);
+        var ids = new HashSet<string>(StringComparer.Ordinal);
         for (var i = 0; i < all.Count; i++)
         {
             if (TagAndCheck(all[i], towns))
             {
-                kept.Add(all[i]);
+                if (ids.Add(all[i].Id))
+                {
+                    kept.Add(all[i]);
+                }
+                else
+                {
+                    Reject("same stand as another spot after moving to a reachable tile");
+                }
             }
 
             if ((i & 63) == 63)
@@ -835,7 +849,8 @@ public sealed class IdleSpotGenerator
 
         EndPhase(
             _reachability
-                ? $"{kept.Count:N0} spots kept of {all.Count:N0}; {reachable:N0} reachable, {unreachable:N0} unreachable"
+                ? $"{kept.Count:N0} spots kept of {all.Count:N0}; {reachable:N0} reachable ({_movedStands:N0} moved to a " +
+                  $"reachable stand), {unreachable:N0} unreachable"
                 : $"{kept.Count:N0} spots kept of {all.Count:N0}"
         );
     }
@@ -855,6 +870,12 @@ public sealed class IdleSpotGenerator
 
     private bool TagAndCheck(IdleSpot spot, List<(string Name, Point3D Center)> towns)
     {
+        // The nearest stand can be a walled-in nook (behind a forge, a fenced yard); prefer one a player can walk to.
+        if (_reach != null && !_reach.IsReached(IdleSpotIndex.StandPoint(spot)) && MoveToReachableStand(spot))
+        {
+            _movedStands++;
+        }
+
         var stand = IdleSpotIndex.StandPoint(spot);
         var region = Region.Find(stand, _map);
 
@@ -924,6 +945,80 @@ public sealed class IdleSpotGenerator
             : spot.TownDistance <= NearTownDistance ? $"{what} near {spot.Town}"
             : $"{what}, {spot.TownDistance} tiles from {spot.Town}";
         return true;
+    }
+
+    private int _movedStands;
+
+    /// <summary>Another standing tile within the task's reach that the walk reached. False if there is none.</summary>
+    private bool MoveToReachableStand(IdleSpot spot)
+    {
+        if (spot.TaskId != null)
+        {
+            HarvestTask task = null;
+            foreach (var t in _harvest)
+            {
+                task = t.Def.Id == spot.TaskId ? t : task;
+            }
+
+            if (task == null)
+            {
+                return false;
+            }
+
+            var target = spot.Location;
+            foreach (var (dx, dy) in IdleWorkHere.Offsets(task.Range))
+            {
+                var x = target.X + dx;
+                var y = target.Y + dy;
+
+                if (!IsExcludedArea(x, y) && _map.CanSpawnMobile(x, y, target.Z - 40, target.Z + 40, false, false, out var z) &&
+                    _reach.IsReached(new Point3D(x, y, z)))
+                {
+                    spot.Stand = new Point3D(x, y, z);
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        if (!_smithyForges.TryGetValue(spot.Id, out var forge))
+        {
+            return false;
+        }
+
+        foreach (var (dx, dy) in IdleWorkHere.Offsets(SmithyStations.Range))
+        {
+            var x = forge.X + dx;
+            var y = forge.Y + dy;
+
+            if (IsExcludedArea(x, y) || !_map.CanSpawnMobile(x, y, forge.Z - 8, forge.Z + 12, false, false, out var z))
+            {
+                continue;
+            }
+
+            var stand = new Point3D(x, y, z);
+            if (!_reach.IsReached(stand))
+            {
+                continue;
+            }
+
+            var all = true;
+            foreach (var taskId in spot.AllTaskIds())
+            {
+                var def = IdleSystem.GetTask(taskId);
+                all &= def != null && IdleTaskHandler.Get(def.Kind)?.CheckStation(null, def, _map, stand, out _) == true;
+            }
+
+            if (all)
+            {
+                spot.Location = stand;
+                spot.Id = $"smithy-{x}-{y}";
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string KindOf(Region region)
