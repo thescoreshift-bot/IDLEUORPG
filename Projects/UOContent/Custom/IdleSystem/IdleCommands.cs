@@ -12,6 +12,7 @@ public static class IdleCommands
     {
         CommandSystem.Register("Idle", AccessLevel.Player, Idle_OnCommand);
         CommandSystem.Register("IdleSim", AccessLevel.GameMaster, IdleSim_OnCommand);
+        CommandSystem.Register("IdleApi", AccessLevel.GameMaster, IdleApi_OnCommand);
     }
 
     [Usage("Idle [stop | status | resume | list | recipes [filter] | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]")]
@@ -422,6 +423,61 @@ public static class IdleCommands
             }
 
             pm.SendMessage(0x22, firstError ?? "You cannot do an idle task there.");
+        }
+    }
+
+    [Usage("IdleApi <status | checkin> <character name>")]
+    [Description(
+        "Shows exactly what a phone or web client would get for a character with an idle task, online or offline. " +
+        "'checkin' settles the offline time since the character left or was last checked."
+    )]
+    public static void IdleApi_OnCommand(CommandEventArgs e)
+    {
+        if (e.Length < 2)
+        {
+            e.Mobile.SendMessage("Usage: [IdleApi <status | checkin> <character name>");
+            return;
+        }
+
+        var pm = IdleSystem.FindPlayerWithTask(e.GetString(1));
+        if (pm == null)
+        {
+            e.Mobile.SendMessage("No character with an idle task has that name.");
+            return;
+        }
+
+        object result;
+        switch (e.GetString(0).ToLowerInvariant())
+        {
+            case "status":
+                {
+                    result = IdleApi.GetStatus(pm);
+                    break;
+                }
+            case "checkin":
+                {
+                    result = IdleApi.CheckIn(pm, out var message);
+                    if (result == null)
+                    {
+                        e.Mobile.SendMessage(0x22, message ?? "Nothing to settle.");
+                        return;
+                    }
+
+                    break;
+                }
+            default:
+                {
+                    e.Mobile.SendMessage("Usage: [IdleApi <status | checkin> <character name>");
+                    return;
+                }
+        }
+
+        var json = System.Text.Json.JsonSerializer.Serialize(result, result.GetType());
+
+        // Chat lines are limited in length, so the JSON is sent in pieces.
+        for (var i = 0; i < json.Length; i += 200)
+        {
+            e.Mobile.SendMessage(0x3B2, json.Substring(i, Math.Min(200, json.Length - i)));
         }
     }
 

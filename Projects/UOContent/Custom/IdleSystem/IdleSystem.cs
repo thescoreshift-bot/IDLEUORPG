@@ -466,6 +466,41 @@ public class IdleSystem : GenericPersistence
         return report;
     }
 
+    /// <summary>
+    /// Settles offline time for a check-in from outside the game, then moves the offline clock's start to now so the
+    /// same time is never settled twice. Each check-in counts at most the usual maximum offline time.
+    /// </summary>
+    public static IdleReport SettleCheckIn(PlayerMobile pm, IdleState state, out string message)
+    {
+        var away = Core.Now - state.LogoutTime;
+
+        if (!Settings.Enabled || away < Settings.MinOfflineTime)
+        {
+            message = "Not enough time has passed since the last check.";
+            return null;
+        }
+
+        var report = Settle(pm, state, away, IdleSettleMode.Login);
+        state.LogoutTime = Core.Now;
+
+        message = report == null ? "The idle task is no longer available." : null;
+        return report;
+    }
+
+    /// <summary>A character with an idle task, by name (staff tools; only characters with a task are searched).</summary>
+    public static PlayerMobile FindPlayerWithTask(string name)
+    {
+        foreach (var pm in _states.Keys)
+        {
+            if (pm.RawName.InsensitiveEquals(name))
+            {
+                return pm;
+            }
+        }
+
+        return null;
+    }
+
     public static void ShowReport(PlayerMobile pm, IdleReport report)
     {
         IdleSummaryGump.SendText(pm, report);
