@@ -131,6 +131,58 @@ public class HarvestIdleHandler : IdleTaskHandler
         return false;
     }
 
+    /// <summary>
+    /// <see cref="MatchesTile"/>, but a land target only counts when nothing walkable or solid covers it (a building's
+    /// floor, a dock): in game such land cannot be clicked, since the client targets what lies on top.
+    /// </summary>
+    public static bool MatchesVisibleTile(HarvestDefinition definition, Map map, int x, int y)
+    {
+        foreach (var tile in map.Tiles.GetStaticTiles(x, y))
+        {
+            if (definition.Validate(tile.ID, false))
+            {
+                return true;
+            }
+        }
+
+        var land = map.Tiles.GetLandTile(x, y);
+        if (!definition.Validate(land.ID & TileData.MaxLandValue, true))
+        {
+            return false;
+        }
+
+        foreach (var tile in map.Tiles.GetStaticAndMultiTiles(x, y))
+        {
+            if (CoversLand(tile.ID, tile.Z, land.Z))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>A static that hides the land under it from targeting: a surface or solid tile reaching above it.</summary>
+    public static bool CoversLand(int staticId, int staticZ, int landZ)
+    {
+        var data = TileData.ItemTable[staticId & TileData.MaxItemValue];
+        return (data.Surface || data.Impassable) && staticZ + data.CalcHeight >= landZ;
+    }
+
+    /// <summary>Height of what is harvested at x, y: the matching static, else the land.</summary>
+    public static int TargetZ(HarvestDefinition definition, Map map, int x, int y)
+    {
+        foreach (var tile in map.Tiles.GetStaticTiles(x, y))
+        {
+            if (definition.Validate(tile.ID, false))
+            {
+                return tile.Z;
+            }
+        }
+
+        return map.Tiles.GetLandTile(x, y).Z;
+    }
+
     public HarvestDefinition GetDefinition(IdleTaskDefinition def) => Get(def).Definition;
 
     public bool IsFishing(IdleTaskDefinition def) => Get(def).System is Fishing;

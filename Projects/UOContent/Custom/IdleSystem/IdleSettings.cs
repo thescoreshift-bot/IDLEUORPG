@@ -51,6 +51,9 @@ public class IdleSettings
     public IdleSkillGainSettings SkillGain { get; set; } = new();
 
     public IdleSpotGeneratorSettings SpotGenerator { get; set; } = new();
+
+    /// <summary>"Work here" ([Idle here, IdleApi.WorkHere): how far around the character to look for a target (max 24).</summary>
+    public int WorkHereRadius { get; set; } = 12;
 }
 
 /// <summary>[IdleGenSpots: how the world scan picks spots.</summary>

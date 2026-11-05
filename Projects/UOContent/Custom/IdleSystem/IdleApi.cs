@@ -142,6 +142,19 @@ public static class IdleApi
     /// time after this one. Returns null with a message when there is nothing to settle: the character is in the
     /// world (live totals are in <see cref="GetStatus"/>), has no eligible offline work, or too little time passed.
     /// </summary>
+    /// <summary>
+    /// "Work here": starts the task where the character is (or logged out) if a target is within reach; otherwise says
+    /// where the nearest target or known spot is. Never moves the character.
+    /// </summary>
+    public static IdleWorkHereInfo WorkHere(PlayerMobile pm, string taskId, IdleOrder order = null) =>
+        IdleWorkHere.Run(pm, taskId, order);
+
+    /// <summary>Known spots for a task nearest to the character (or where it logged out), up to 50.</summary>
+    public static IReadOnlyList<IdleSpotInfo> NearestSpots(PlayerMobile pm, string taskId, int max = 5) =>
+        IdleWorkHere.TryGetPosition(pm, out var map, out var location)
+            ? IdleWorkHere.NearestSpots(map, location, taskId, max)
+            : [];
+
     /// <summary>The Focus button: starts Focus for the character's task, online or offline.</summary>
     public static IdleFocusInfo ActivateFocus(PlayerMobile pm, out string message)
     {

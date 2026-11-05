@@ -1,4 +1,5 @@
 using System;
+using Server.Accounting;
 using Server.Commands;
 using Server.Mobiles;
 using Server.Targeting;
@@ -15,10 +16,12 @@ public static class IdleCommands
         CommandSystem.Register("IdleApi", AccessLevel.GameMaster, IdleApi_OnCommand);
     }
 
-    [Usage("Idle [stop | status | resume | list | recipes [filter] | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]")]
+    [Usage("Idle [stop | status | resume | list | recipes [filter] | here <task> | near <task> [count] | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]")]
     [Description(
         "Choose the spot your character works while you are logged out. With no argument, target the spot. " +
-        "smelt/craft start an order where you stand; 'at <location>' can be followed by the same order."
+        "smelt/craft start an order where you stand; 'at <location>' can be followed by the same order. " +
+        "'here <task>' starts the task at the nearest target within reach or says where the nearest one is; " +
+        "'here smelt <amount>' and 'here craft ...' do the same for orders. 'near <task>' lists the nearest known spots."
     )]
     public static void Idle_OnCommand(CommandEventArgs e)
     {
@@ -56,6 +59,16 @@ public static class IdleCommands
                     SendLocations(pm);
                     break;
                 }
+            case "here" when e.Length > 1:
+                {
+                    WorkHere(pm, e);
+                    break;
+                }
+            case "near" when e.Length > 1:
+                {
+                    SendNearest(pm, e);
+                    break;
+                }
             case "at" when e.Length > 1:
                 {
                     StartAt(pm, e);
@@ -91,7 +104,7 @@ public static class IdleCommands
             default:
                 {
                     pm.SendMessage(
-                        "Usage: [Idle [stop | status | resume | list | recipes [filter] | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]"
+                        "Usage: [Idle [stop | status | resume | list | recipes [filter] | here <task> | near <task> [count] | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]"
                     );
                     break;
                 }
@@ -233,6 +246,178 @@ public static class IdleCommands
         }
 
         pm.SendMessage(0x22, firstError ?? "That idle task is not available.");
+    }
+
+    /// <summary>A task by id or display name, e.g. "lumberjacking" or "Lumberjacking".</summary>
+    private static IdleTaskDefinition FindTask(string name)
+    {
+        if (IdleSystem.GetTask(name) is { } def)
+        {
+            return def;
+        }
+
+        foreach (var task in IdleSystem.Tasks.Values)
+        {
+            if (task.Name.InsensitiveEquals(name))
+            {
+                return task;
+            }
+        }
+
+        return null;
+    }
+
+    private static void SendTaskNames(Mobile m)
+    {
+        using var names = ValueStringBuilder.Create();
+        foreach (var id in IdleSystem.Tasks.Keys)
+        {
+            if (names.Length > 0)
+            {
+                names.Append(", ");
+            }
+
+            names.Append(id);
+        }
+
+        m.SendMessage(0x22, $"Unknown task. Tasks: {names.AsSpan()}.");
+    }
+
+    private static void WorkHere(PlayerMobile pm, CommandEventArgs e)
+    {
+        var arg = e.GetString(1).ToLowerInvariant();
+        IdleWorkHereInfo result = null;
+
+        if (arg is "smelt" or "craft")
+        {
+            if (!TryParseOrder(e, 1, out var verb, out var order, out var error))
+            {
+                pm.SendMessage(0x22, error);
+                return;
+            }
+
+            var kind = KindForVerb(verb);
+            foreach (var def in IdleSystem.Tasks.Values)
+            {
+                if (!def.Kind.InsensitiveEquals(kind))
+                {
+                    continue;
+                }
+
+                var attempt = IdleWorkHere.Run(pm, def.Id, order);
+
+                // Started wins; otherwise keep the most useful answer (directions over a refusal).
+                if (attempt.Status == "Started" || result == null || result.Status == "Failed")
+                {
+                    result = attempt;
+                }
+
+                if (attempt.Status == "Started")
+                {
+                    break;
+                }
+            }
+
+            if (result == null)
+            {
+                pm.SendMessage(0x22, "That idle task is not available.");
+                return;
+            }
+        }
+        else
+        {
+            var def = FindTask(arg);
+            if (def == null)
+            {
+                SendTaskNames(pm);
+                return;
+            }
+
+            result = IdleWorkHere.Run(pm, def.Id);
+        }
+
+        SendWorkHere(pm, result);
+    }
+
+    private static void SendWorkHere(PlayerMobile pm, IdleWorkHereInfo result)
+    {
+        switch (result.Status)
+        {
+            case "Started":
+                {
+                    SendStarted(pm);
+                    break;
+                }
+            case "Failed" or "NotFound":
+                {
+                    pm.SendMessage(0x22, result.Message);
+                    break;
+                }
+            default:
+                {
+                    pm.SendMessage(0x59, result.Message);
+                    break;
+                }
+        }
+    }
+
+    private static void SendNearest(PlayerMobile pm, CommandEventArgs e)
+    {
+        var def = FindTask(e.GetString(1));
+        if (def == null)
+        {
+            SendTaskNames(pm);
+            return;
+        }
+
+        var count = e.Length > 2 ? Math.Clamp(e.GetInt32(2), 1, 20) : 5;
+        var spots = IdleApi.NearestSpots(pm, def.Id, count);
+
+        if (spots.Count == 0)
+        {
+            pm.SendMessage($"No known {def.Name} spots on this map.");
+            return;
+        }
+
+        foreach (var s in spots)
+        {
+            pm.SendMessage($"{s.Distance} tiles {s.Direction}: {s.Name} ({s.Id}){DescribeRisk(s)}");
+        }
+
+        pm.SendMessage($"Go to a spot and use [Idle at <id>, or [Idle here {def.Id} when you are close.");
+    }
+
+    /// <summary>Short risk labels for a spot, e.g. " - wilderness, 2 hostile spawners, not reachable on foot".</summary>
+    private static string DescribeRisk(IdleSpotInfo s)
+    {
+        using var sb = ValueStringBuilder.Create();
+
+        if (s.RegionKind != null)
+        {
+            sb.Append(" - ");
+            sb.Append(
+                s.RegionKind switch
+                {
+                    "Town"          => "town",
+                    "UnguardedTown" => "unguarded town",
+                    "Guarded"       => "guarded",
+                    "Dungeon"       => "dungeon",
+                    _               => "wilderness"
+                }
+            );
+        }
+
+        if (s.HostileSpawners > 0)
+        {
+            sb.Append($", {s.HostileSpawners} hostile spawner(s) nearby");
+        }
+
+        if (s.Reachable == false)
+        {
+            sb.Append(", not reachable on foot");
+        }
+
+        return sb.ToString();
     }
 
     private static void SendStarted(PlayerMobile pm)
@@ -453,29 +638,53 @@ public static class IdleCommands
         }
     }
 
-    [Usage("IdleApi <status | checkin> <character name>")]
+    [Usage("IdleApi <status | checkin> <character name> | near <character name> <task> [count] | here <character name> <task>")]
     [Description(
         "Shows exactly what a phone or web client would get for a character with an idle task, online or offline. " +
-        "'checkin' settles the offline time since the character left or was last checked."
+        "'checkin' settles the offline time since the character left or was last checked. 'near' and 'here' are the " +
+        "spot lookup and work-here calls, from where the character is or logged out ('here' really starts the task)."
     )]
     public static void IdleApi_OnCommand(CommandEventArgs e)
     {
+        const string usage =
+            "Usage: [IdleApi <status | checkin> <character name> | near <character name> <task> [count] | here <character name> <task>";
+
         if (e.Length < 2)
         {
-            e.Mobile.SendMessage("Usage: [IdleApi <status | checkin> <character name>");
+            e.Mobile.SendMessage(usage);
             return;
         }
 
-        var pm = IdleSystem.FindPlayerWithTask(e.GetString(1));
+        var verb = e.GetString(0).ToLowerInvariant();
+        var spotCall = verb is "near" or "here";
+        var pm = spotCall ? FindPlayer(e.GetString(1)) : IdleSystem.FindPlayerWithTask(e.GetString(1));
+
         if (pm == null)
         {
-            e.Mobile.SendMessage("No character with an idle task has that name.");
+            e.Mobile.SendMessage(spotCall ? "No player character has that name." : "No character with an idle task has that name.");
+            return;
+        }
+
+        IdleTaskDefinition task = null;
+        if (spotCall && (e.Length < 3 || (task = FindTask(e.GetString(2))) == null))
+        {
+            SendTaskNames(e.Mobile);
             return;
         }
 
         object result;
-        switch (e.GetString(0).ToLowerInvariant())
+        switch (verb)
         {
+            case "near":
+                {
+                    result = IdleApi.NearestSpots(pm, task.Id, e.Length > 3 ? e.GetInt32(3) : 5);
+                    break;
+                }
+            case "here":
+                {
+                    result = IdleApi.WorkHere(pm, task.Id);
+                    break;
+                }
             case "status":
                 {
                     result = IdleApi.GetStatus(pm);
@@ -494,7 +703,7 @@ public static class IdleCommands
                 }
             default:
                 {
-                    e.Mobile.SendMessage("Usage: [IdleApi <status | checkin> <character name>");
+                    e.Mobile.SendMessage(usage);
                     return;
                 }
         }
@@ -506,6 +715,28 @@ public static class IdleCommands
         {
             e.Mobile.SendMessage(0x3B2, json.Substring(i, Math.Min(200, json.Length - i)));
         }
+    }
+
+    /// <summary>A player character by name, in the world or logged out. Staff command use only.</summary>
+    private static PlayerMobile FindPlayer(string name)
+    {
+        if (IdleSystem.FindPlayerWithTask(name) is { } withTask)
+        {
+            return withTask;
+        }
+
+        foreach (var account in Accounts.GetAccounts())
+        {
+            for (var i = 0; i < account.Length; i++)
+            {
+                if (account[i] is PlayerMobile pm && !pm.Deleted && pm.RawName.InsensitiveEquals(name))
+                {
+                    return pm;
+                }
+            }
+        }
+
+        return null;
     }
 
     [Usage("IdleSim <hours> [preview]")]

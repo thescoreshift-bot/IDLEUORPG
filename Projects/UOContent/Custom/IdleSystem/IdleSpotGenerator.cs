@@ -36,6 +36,9 @@ public sealed class IdleSpotGenerator
     /// <summary>Target tiles tried per spacing cell when looking for the best spot in it.</summary>
     private const int SamplesPerCell = 8;
 
+    /// <summary>Spots closer than this to a town's center are named "near" it; farther ones give the distance.</summary>
+    private const int NearTownDistance = 150;
+
     private static IdleSpotGenerator _current;
 
     private readonly Mobile _from;
@@ -434,17 +437,28 @@ public sealed class IdleSpotGenerator
                     continue;
                 }
 
-                var landId = land[(j << 3) + i].ID & TileData.MaxLandValue;
+                var landTile = land[(j << 3) + i];
+                var landId = landTile.ID & TileData.MaxLandValue;
                 var cell = statics[i][j];
                 var index = (long)y * _width + x;
 
                 foreach (var task in _harvest)
                 {
-                    var match = task.Land[landId];
+                    var match = false;
 
                     for (var k = 0; !match && k < cell.Length; k++)
                     {
                         match = task.Statics[cell[k].ID & TileData.MaxItemValue];
+                    }
+
+                    // Land under a floor or other solid static cannot be targeted in game (MatchesVisibleTile).
+                    if (!match && task.Land[landId])
+                    {
+                        match = true;
+                        for (var k = 0; match && k < cell.Length; k++)
+                        {
+                            match = !HarvestIdleHandler.CoversLand(cell[k].ID, cell[k].Z, landTile.Z);
+                        }
                     }
 
                     if (match)
@@ -575,7 +589,7 @@ public sealed class IdleSpotGenerator
                 continue;
             }
 
-            var target = new Point3D(x, y, TargetZ(task, x, y));
+            var target = new Point3D(x, y, HarvestIdleHandler.TargetZ(task.Definition, _map, x, y));
 
             if (!IdleStandFinder.TryFind(_map, target, task.Range, null, IsAllowedStand, out var stand))
             {
@@ -614,20 +628,6 @@ public sealed class IdleSpotGenerator
             Stand = bestStand,
             Targets = bestDensity
         };
-    }
-
-    /// <summary>Height of what is harvested at x, y: the matching static, else the land.</summary>
-    private int TargetZ(HarvestTask task, int x, int y)
-    {
-        foreach (var tile in _map.Tiles.GetStaticTiles(x, y))
-        {
-            if (task.Statics[tile.ID & TileData.MaxItemValue])
-            {
-                return tile.Z;
-            }
-        }
-
-        return _map.Tiles.GetLandTile(x, y).Z;
     }
 
     private static void Space(List<IdleSpot> ordered, List<IdleSpot> accepted, int spacing)
@@ -920,7 +920,9 @@ public sealed class IdleSpotGenerator
         spot.TownDistance = spot.Town == null ? 0 : best;
 
         var what = spot.TaskId != null ? IdleSystem.GetTask(spot.TaskId)?.Name ?? spot.TaskId : "Smithy";
-        spot.Name = spot.Town == null ? what : $"{what} near {spot.Town}";
+        spot.Name = spot.Town == null ? what
+            : spot.TownDistance <= NearTownDistance ? $"{what} near {spot.Town}"
+            : $"{what}, {spot.TownDistance} tiles from {spot.Town}";
         return true;
     }
 
