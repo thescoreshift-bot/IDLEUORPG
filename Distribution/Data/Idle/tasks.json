@@ -49,11 +49,23 @@
       // Old footwear from the catch table is thrown back instead of filling the 125-item bank box.
       // Remove names from this list to keep them.
       "DiscardItems": [ "Boots", "Shoes", "Sandals", "ThighBoots" ]
+    },
+    {
+      "Id": "smelting",
+      "Name": "Smelting",
+      // Takes an order: [Idle smelt <amount>. Uses Mining and needs a forge within 2 tiles, as online.
+      // Ore comes from the backpack first, then the bank box; ingots go to the backpack (weight rules) or the bank.
+      "Kind": "Smelt",
+      "Rate": 1.0,
+      "SkillGainMultiplier": 1.0,
+      // One double-click on a pile plus targeting the forge.
+      "SecondsPerAttempt": 1.5
     }
   ],
 
   // Named spots a task can target without a click: [Idle at <Id>, or an external API.
-  // The character must stand (or have logged out) within the task's range of Location: 2 tiles for mining and lumberjacking, 4 for fishing.
+  // The character must stand (or have logged out) within the task's range of Location: 2 tiles for mining, lumberjacking,
+  // and smithing, 4 for fishing. "TaskIds" lets one spot serve several tasks.
   "Locations": [
     {
       "Id": "minoc-mine",
@@ -96,6 +108,35 @@
       "TaskId": "fishing",
       "Map": "Felucca",
       "Location": { "x": 490, "y": 1022, "z": -5 }
+    },
+    {
+      // Smithies: Location is where to stand, within 2 tiles of both the anvil and the forge (decoration items).
+      "Id": "britain-smithy",
+      "Name": "Britain, smithy by the docks (anvil 1346,1774, forge 1344,1776)",
+      "TaskIds": [ "smelting", "blacksmithing" ],
+      "Map": "Felucca",
+      "Location": { "x": 1345, "y": 1775, "z": 15 }
+    },
+    {
+      "Id": "britain-smithy-north",
+      "Name": "Britain, north smithy (anvil 1423,1556, forge 1424,1558)",
+      "TaskIds": [ "smelting", "blacksmithing" ],
+      "Map": "Felucca",
+      "Location": { "x": 1424, "y": 1557, "z": 30 }
+    },
+    {
+      "Id": "minoc-smithy",
+      "Name": "Minoc, smithy beside the mine (anvil 2560,501, forge 2561,501)",
+      "TaskIds": [ "smelting", "blacksmithing" ],
+      "Map": "Felucca",
+      "Location": { "x": 2560, "y": 502, "z": 0 }
+    },
+    {
+      "Id": "minoc-smithy-town",
+      "Name": "Minoc, town smithy (anvil 2534,571, forge 2535,571)",
+      "TaskIds": [ "smelting", "blacksmithing" ],
+      "Map": "Felucca",
+      "Location": { "x": 2535, "y": 572, "z": 0 }
     }
   ]
 }

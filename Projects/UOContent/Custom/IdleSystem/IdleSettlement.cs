@@ -480,7 +480,7 @@ public static class IdleSettlement
     }
 
     /// <summary>Backpack first (its limits and the character's carry limit), then bank box; the rest is lost.</summary>
-    private static IdleItemLine Deliver(PlayerMobile pm, Type type, int amount, bool place, int limit)
+    internal static IdleItemLine Deliver(PlayerMobile pm, Type type, int amount, bool place, int limit)
     {
         if (amount <= 0)
         {
