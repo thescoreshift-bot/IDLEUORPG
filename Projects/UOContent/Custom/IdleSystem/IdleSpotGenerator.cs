@@ -55,6 +55,8 @@ public sealed class IdleSpotGenerator
 
     private TimerExecutionToken _timer;
     private double _loopMilliseconds;
+    private double _longestTickMilliseconds;
+    private string _longestTickPhase;
     private long _peakWorkingSet;
     private string _phase = "starting";
     private double _phaseStartLoop;
@@ -181,7 +183,8 @@ public sealed class IdleSpotGenerator
 
     private string Status() =>
         $"Idle spot generator: {_phase}. {Stopwatch.GetElapsedTime(_started).TotalSeconds:N0} s elapsed, " +
-        $"{_loopMilliseconds / 1000:N1} s of loop time, working set {Mb(Environment.WorkingSet)} " +
+        $"{_loopMilliseconds / 1000:N1} s of loop time, longest tick {_longestTickMilliseconds:N0} ms, " +
+        $"working set {Mb(Environment.WorkingSet)} " +
         $"(+{Mb(Environment.WorkingSet - _startWorkingSet)}).";
 
     private void Tick()
@@ -212,7 +215,13 @@ public sealed class IdleSpotGenerator
         }
         finally
         {
-            _loopMilliseconds += Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+            var tick = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+            _loopMilliseconds += tick;
+            if (tick > _longestTickMilliseconds)
+            {
+                _longestTickMilliseconds = tick;
+                _longestTickPhase = _phase;
+            }
             _peakWorkingSet = Math.Max(_peakWorkingSet, Environment.WorkingSet);
         }
     }
@@ -381,9 +390,13 @@ public sealed class IdleSpotGenerator
             for (var by = 0; by < blocksHigh; by++)
             {
                 ScanBlock(tiles, bx, by);
-            }
 
-            yield return true;
+                // First reads come from disk; 64 blocks keeps a slice short even on a cold file cache.
+                if ((by & 63) == 63)
+                {
+                    yield return true;
+                }
+            }
         }
 
         using var sb = ValueStringBuilder.Create();
@@ -506,9 +519,13 @@ public sealed class IdleSpotGenerator
                 {
                     candidates.Add(spot);
                 }
-            }
 
-            yield return true;
+                // A shoreline cell can cost ~1 ms (deep-water checks), so a full row would overrun the budget.
+                if ((cx / cellSize & 7) == 7)
+                {
+                    yield return true;
+                }
+            }
         }
 
         // Densest first, so where spots compete for spacing the one with the most targets around it wins.
@@ -751,10 +768,18 @@ public sealed class IdleSpotGenerator
     {
         BeginPhase("Walking the map from cities, moongates, and teleporters");
 
+        // Setup is split across ticks: the position buffer alone is one byte per map tile.
         _reach = new ReachMap(_map);
-        _reach.SeedFromTravel();
+        yield return true;
 
-        while (_reach.Step(4096))
+        _reach.SeedFromTravel();
+        yield return true;
+
+        _reach.LoadTeleporters();
+        yield return true;
+
+        // About 10 µs per position, so 512 keeps one slice near 5 ms.
+        while (_reach.Step(512))
         {
             yield return true;
         }
@@ -977,7 +1002,8 @@ public sealed class IdleSpotGenerator
 
         var elapsed = Stopwatch.GetElapsedTime(_started);
         var summary =
-            $"{elapsed.TotalSeconds:N0} s elapsed, {_loopMilliseconds / 1000:N1} s of loop time. Working set " +
+            $"{elapsed.TotalSeconds:N0} s elapsed, {_loopMilliseconds / 1000:N1} s of loop time, longest tick " +
+            $"{_longestTickMilliseconds:N0} ms ({_longestTickPhase}). Working set " +
             $"{Mb(Environment.WorkingSet)} (+{Mb(Environment.WorkingSet - _startWorkingSet)}), peak {Mb(_peakWorkingSet)}.";
 
         if (_dryRun)
@@ -1046,7 +1072,8 @@ public sealed class IdleSpotGenerator
     /// </summary>
     private sealed class ReachMap
     {
-        private const sbyte Unseen = sbyte.MinValue;
+        // Heights are stored offset by 128 so a fresh (zeroed) buffer means unseen without a fill pass.
+        private const byte Unseen = 0;
 
         // Same tile and within this height: treated as the same floor.
         private const int SameFloor = 10;
@@ -1056,7 +1083,7 @@ public sealed class IdleSpotGenerator
         private readonly Map _map;
         private readonly int _width;
         private readonly int _height;
-        private readonly sbyte[] _floor;
+        private readonly byte[] _floor;
         private readonly HashSet<long> _upperFloors = [];
         private readonly Queue<long> _queue = new();
         private readonly Dictionary<int, List<Point3D>> _teleports = [];
@@ -1069,8 +1096,7 @@ public sealed class IdleSpotGenerator
             _map = map;
             _width = map.Width;
             _height = map.Height;
-            _floor = new sbyte[_width * _height];
-            Array.Fill(_floor, Unseen);
+            _floor = new byte[_width * _height];
         }
 
         public void SeedFromTravel()
@@ -1096,11 +1122,9 @@ public sealed class IdleSpotGenerator
                     Visit(entry.Location.X, entry.Location.Y, entry.Location.Z);
                 }
             }
-
-            LoadTeleporters();
         }
 
-        private void LoadTeleporters()
+        public void LoadTeleporters()
         {
             var path = Path.Combine(Core.BaseDirectory, "Data/teleporters.json");
             if (!File.Exists(path))
@@ -1157,9 +1181,9 @@ public sealed class IdleSpotGenerator
 
             if (floor == Unseen)
             {
-                _floor[index] = (sbyte)Math.Clamp(z, -127, 127);
+                _floor[index] = (byte)(Math.Clamp(z, -127, 127) + 128);
             }
-            else if (Math.Abs(floor - z) <= SameFloor || !_upperFloors.Add(UpperKey(index, z)))
+            else if (Math.Abs(floor - 128 - z) <= SameFloor || !_upperFloors.Add(UpperKey(index, z)))
             {
                 return;
             }
@@ -1220,7 +1244,7 @@ public sealed class IdleSpotGenerator
                 return false;
             }
 
-            if (Math.Abs(floor - p.Z) <= SameFloor + 6)
+            if (Math.Abs(floor - 128 - p.Z) <= SameFloor + 6)
             {
                 return true;
             }
