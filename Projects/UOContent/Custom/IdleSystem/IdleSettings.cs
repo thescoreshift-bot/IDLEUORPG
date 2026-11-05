@@ -26,6 +26,17 @@ public class IdleSettings
     /// <summary>On login, the task picks up again as live work if the character is still at the spot.</summary>
     public bool ResumeOnLogin { get; set; } = true;
 
+    /// <summary>Focus ([Focus]): a short burst of faster work, live or offline.</summary>
+    public bool FocusEnabled { get; set; } = true;
+
+    public double FocusDurationSeconds { get; set; } = 120;
+
+    /// <summary>Extra work speed while focused (0.15 = 15% faster).</summary>
+    public double FocusSpeedBonus { get; set; } = 0.15;
+
+    /// <summary>Wait after a Focus ends before the next can start.</summary>
+    public double FocusCooldownSeconds { get; set; } = 300;
+
     /// <summary>Time away beyond this is not counted.</summary>
     public TimeSpan MaxOfflineTime { get; set; } = TimeSpan.FromHours(8);
 

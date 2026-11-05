@@ -35,7 +35,7 @@ public static class IdleSettlement
 
     public static IdleReport Settle(
         PlayerMobile pm, IdleTaskDefinition def, IdleTaskHandler handler, IdleTarget target, IdleOrder order, TimeSpan away,
-        IdleSettleMode mode
+        IdleSettleMode mode, double focusSeconds = 0
     )
     {
         var settings = IdleSystem.Settings;
@@ -73,7 +73,9 @@ public static class IdleSettlement
         var startDex = pm.RawDex;
         var startInt = pm.RawInt;
 
-        var budget = counted.TotalSeconds * settings.OfflineRate * def.Rate;
+        // Focus adds its bonus for the part of its window that fell within the counted time.
+        var focusBonus = focusSeconds * settings.OfflineRate * def.Rate * settings.FocusSpeedBonus;
+        var budget = counted.TotalSeconds * settings.OfflineRate * def.Rate + focusBonus;
         var successesLeft = run.SuccessesAllowed == int.MaxValue ? double.PositiveInfinity : run.SuccessesAllowed;
 
         if (notes != null)
@@ -82,8 +84,13 @@ public static class IdleSettlement
                 $"Time: {IdleSummaryGump.FormatTime(away)} away, {IdleSummaryGump.FormatTime(counted)} counted (max {IdleSummaryGump.FormatTime(settings.MaxOfflineTime)})"
             );
             notes.Add(
-                $"Work: {counted.TotalSeconds:N0}s x offline {settings.OfflineRate:0.##} x task {def.Rate:0.##} = {budget:N0}s of online-equivalent work"
+                $"Work: {counted.TotalSeconds:N0}s x offline {settings.OfflineRate:0.##} x task {def.Rate:0.##} = {budget - focusBonus:N0}s of online-equivalent work"
             );
+            if (focusBonus > 0)
+            {
+                notes.Add($"Focus: {focusSeconds:N0}s of the window fell in this time, +{focusBonus:N0}s of work");
+            }
+
             notes.Add(
                 $"Skill gain: {(canGain ? "on" : "off")} (x{gainMultiplier:0.##}, region {(regionAllowsGain ? "allows" : "blocks")}, anti-macro not applied offline)"
             );

@@ -67,7 +67,8 @@ public record IdleStatusInfo(
     DateTime? Since,
     double AccruedSeconds,
     string Problem,
-    IdleSummaryInfo Live
+    IdleSummaryInfo Live,
+    IdleFocusInfo Focus
 );
 
 /// <summary>
@@ -84,7 +85,7 @@ public static class IdleApi
 
         if (state == null || def == null)
         {
-            return new IdleStatusInfo(null, null, null, null, 0, 0, 0, null, "None", 0, null, 0, null, null);
+            return new IdleStatusInfo(null, null, null, null, 0, 0, 0, null, "None", 0, null, 0, null, null, IdleFocus.GetInfo(pm));
         }
 
         var order = state.Order == null
@@ -110,7 +111,7 @@ public static class IdleApi
         else if (pm.Map == Map.Internal && state.LogoutResult == IdleLogoutResult.Eligible)
         {
             mode = "Offline";
-            rate = settings.OfflineRate * def.Rate;
+            rate = settings.OfflineRate * def.Rate * IdleFocus.GetMultiplier(state, Core.Now);
             since = state.LogoutTime;
             var away = Core.Now - state.LogoutTime;
             accrued = Math.Min(away.TotalSeconds, settings.MaxOfflineTime.TotalSeconds);
@@ -131,7 +132,7 @@ public static class IdleApi
 
         return new IdleStatusInfo(
             def.Id, def.Name, target.LocationId, target.Map?.Name, target.Location.X, target.Location.Y, target.Location.Z,
-            order, mode, rate, since, accrued, problem, live
+            order, mode, rate, since, accrued, problem, live, IdleFocus.GetInfo(pm)
         );
     }
 
@@ -141,6 +142,13 @@ public static class IdleApi
     /// time after this one. Returns null with a message when there is nothing to settle: the character is in the
     /// world (live totals are in <see cref="GetStatus"/>), has no eligible offline work, or too little time passed.
     /// </summary>
+    /// <summary>The Focus button: starts Focus for the character's task, online or offline.</summary>
+    public static IdleFocusInfo ActivateFocus(PlayerMobile pm, out string message)
+    {
+        IdleFocus.TryActivate(pm, out message);
+        return IdleFocus.GetInfo(pm);
+    }
+
     public static IdleSummaryInfo CheckIn(PlayerMobile pm, out string message)
     {
         var state = IdleSystem.GetState(pm);

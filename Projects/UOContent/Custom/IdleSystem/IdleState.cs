@@ -95,6 +95,9 @@ public class IdleState
     /// <summary>Start of live work since the character last left the world; drives the full-rate window. Not saved.</summary>
     public DateTime OnlineSince { get; set; }
 
+    /// <summary>When the current or last Focus started. Not saved.</summary>
+    public DateTime FocusStart { get; set; }
+
     /// <summary>A stop rule broke during the logout delay, so no offline work follows. Not saved.</summary>
     public IdleLogoutResult Interrupted { get; set; }
 

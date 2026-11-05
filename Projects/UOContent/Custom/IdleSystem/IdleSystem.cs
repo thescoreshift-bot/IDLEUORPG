@@ -444,7 +444,15 @@ public class IdleSystem : GenericPersistence
             return null;
         }
 
-        var report = IdleSettlement.Settle(pm, def, handler, state.Target, state.Order, away, mode);
+        // Real offline time can overlap a Focus window; staff simulations have no real time to overlap.
+        var focusSeconds = 0.0;
+        if (mode == IdleSettleMode.Login)
+        {
+            var counted = away > Settings.MaxOfflineTime ? Settings.MaxOfflineTime : away;
+            focusSeconds = IdleFocus.GetOverlapSeconds(state, state.LogoutTime, state.LogoutTime + counted);
+        }
+
+        var report = IdleSettlement.Settle(pm, def, handler, state.Target, state.Order, away, mode, focusSeconds);
 
         // A finished order ends the task; the summary says so through the order status.
         if (mode != IdleSettleMode.Preview && state.Order?.Remaining <= 0)

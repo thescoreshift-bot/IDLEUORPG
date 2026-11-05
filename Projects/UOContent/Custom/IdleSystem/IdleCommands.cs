@@ -301,6 +301,20 @@ public static class IdleCommands
             pm.SendMessage("Not working right now. [Idle resume starts again at the spot.");
         }
 
+        var focus = IdleFocus.GetInfo(pm);
+        if (focus.Active)
+        {
+            pm.SendMessage(0x59, $"Focus: active, {focus.SpeedBonus:P0} faster for {IdleSummaryGump.FormatTime(TimeSpan.FromSeconds(focus.SecondsLeft))} more.");
+        }
+        else if (focus.Enabled && focus.ReadyInSeconds > 0)
+        {
+            pm.SendMessage($"Focus: ready again in {IdleSummaryGump.FormatTime(TimeSpan.FromSeconds(focus.ReadyInSeconds))}.");
+        }
+        else if (focus.Enabled)
+        {
+            pm.SendMessage("Focus: ready ([Focus).");
+        }
+
         var result = IdleSystem.Evaluate(pm, state, pm.Map, pm.Location);
         if (result == IdleLogoutResult.Eligible)
         {

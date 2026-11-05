@@ -41,7 +41,7 @@ public static class IdleOnlineWork
         var fullRate = fullHours <= 0 || state.OnlineSince == default ||
                        Core.Now - state.OnlineSince < TimeSpan.FromHours(fullHours);
 
-        return (fullRate ? settings.OnlineRate : settings.OfflineRate) * def.Rate;
+        return (fullRate ? settings.OnlineRate : settings.OfflineRate) * def.Rate * IdleFocus.GetMultiplier(state, Core.Now);
     }
 
     /// <summary>
