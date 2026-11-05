@@ -235,7 +235,11 @@ public static class IdleCommands
 
             foreach (var item in report.Items)
             {
-                if (_preview)
+                if (item.Discarded)
+                {
+                    from.SendMessage(0x59, $"Discarded: {item.Amount:N0} {item.Name}");
+                }
+                else if (_preview)
                 {
                     from.SendMessage(0x59, $"Would give: {item.Amount:N0} {item.Name}");
                 }

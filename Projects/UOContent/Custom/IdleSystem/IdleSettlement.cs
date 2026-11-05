@@ -198,11 +198,13 @@ public static class IdleSettlement
         foreach (var (type, expected) in yields)
         {
             var amount = RoundRandom(expected);
-            var line = Deliver(pm, type, amount, mode != IdleSettleMode.Preview);
+            var discard = def.DiscardTypes.Contains(type);
+            var line = Deliver(pm, type, amount, mode != IdleSettleMode.Preview && !discard);
             if (line != null)
             {
                 report.Items.Add(line);
-                notes?.Add($"Yield: {line.Name} expected {expected:N2} -> {amount:N0}");
+                line.Discarded = discard;
+                notes?.Add($"Yield: {line.Name} expected {expected:N2} -> {amount:N0}{(discard ? " (discarded)" : "")}");
             }
         }
 

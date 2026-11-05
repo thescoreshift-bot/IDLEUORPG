@@ -18,11 +18,42 @@
       "RelocateSeconds": 60,
       // Average: the world's vein mix (the miner roams between rocks). Target: only the chosen spot's own vein.
       "VeinMode": "Average"
+    },
+    {
+      "Id": "lumberjacking",
+      "Name": "Lumberjacking",
+      "Kind": "Harvest",
+      // No HarvestDefinition: Lumberjacking has a single one. In LBR it yields plain logs (20 per success in Felucca).
+      // The hatchet or axe must be equipped, as online.
+      "HarvestSystem": "Lumberjacking",
+      "Rate": 1.0,
+      "SkillGainMultiplier": 1.0,
+      // 1-3 chops of 1.6s per harvest (2 on average) plus re-targeting.
+      "SecondsPerAttempt": 3.5,
+      // A tree area holds 20-45 logs, so it runs dry after one or two successes. Seconds to walk to the next tree.
+      "RelocateSeconds": 15,
+      "VeinMode": "Average"
+    },
+    {
+      "Id": "fishing",
+      "Name": "Fishing",
+      "Kind": "Harvest",
+      "HarvestSystem": "Fishing",
+      "Rate": 1.0,
+      "SkillGainMultiplier": 1.0,
+      // One cast takes about 8 seconds before the catch, plus re-targeting.
+      "SecondsPerAttempt": 9.0,
+      // A fishing spot holds 5-15 fish. Seconds to move along the shore to fresh water.
+      "RelocateSeconds": 20,
+      "VeinMode": "Average",
+      // Old footwear from the catch table is thrown back instead of filling the 125-item bank box.
+      // Remove names from this list to keep them.
+      "DiscardItems": [ "Boots", "Shoes", "Sandals", "ThighBoots" ]
     }
   ],
 
   // Named spots a task can target without a click: [Idle at <Id>, or an external API.
-  // The character must stand (or have logged out) within the task's range (2 tiles for mining) of Location.
+  // The character must stand (or have logged out) within the task's range of Location: 2 tiles for mining and lumberjacking, 4 for fishing.
   "Locations": [
     {
       "Id": "minoc-mine",
@@ -37,6 +68,34 @@
       "TaskId": "mining",
       "Map": "Felucca",
       "Location": { "x": 1436, "y": 1227, "z": 10 }
+    },
+    {
+      "Id": "britain-woods",
+      "Name": "Woods west of Britain, oak tree (stand at 1401, 1527)",
+      "TaskId": "lumberjacking",
+      "Map": "Felucca",
+      "Location": { "x": 1400, "y": 1527, "z": 0 }
+    },
+    {
+      "Id": "yew-woods",
+      "Name": "Yew woods south of town, yew tree (stand at 559, 1026)",
+      "TaskId": "lumberjacking",
+      "Map": "Felucca",
+      "Location": { "x": 558, "y": 1026, "z": 0 }
+    },
+    {
+      "Id": "britain-shore",
+      "Name": "Britain, open water east of the docks (stand at 1509, 1747)",
+      "TaskId": "fishing",
+      "Map": "Felucca",
+      "Location": { "x": 1508, "y": 1747, "z": -5 }
+    },
+    {
+      "Id": "yew-shore",
+      "Name": "Yew, pond shore west of town (stand at 491, 1022)",
+      "TaskId": "fishing",
+      "Map": "Felucca",
+      "Location": { "x": 490, "y": 1022, "z": -5 }
     }
   ]
 }

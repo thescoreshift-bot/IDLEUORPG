@@ -42,7 +42,14 @@ public class IdleSummaryGump : DynamicGump
 
         foreach (var item in report.Items)
         {
-            pm.SendMessage(0x59, $"  {item.Amount:N0} {item.Name} (pack {item.ToPack:N0}, bank {item.ToBank:N0}, lost {item.Lost:N0})");
+            if (item.Discarded)
+            {
+                pm.SendMessage(0x59, $"  {item.Amount:N0} {item.Name} (discarded)");
+            }
+            else
+            {
+                pm.SendMessage(0x59, $"  {item.Amount:N0} {item.Name} (pack {item.ToPack:N0}, bank {item.ToBank:N0}, lost {item.Lost:N0})");
+            }
         }
 
         foreach (var skill in report.Skills)
@@ -95,6 +102,11 @@ public class IdleSummaryGump : DynamicGump
         foreach (var item in r.Items)
         {
             sb.Append($"- {item.Amount:N0} {item.Name}");
+            if (item.Discarded)
+            {
+                sb.Append(" - discarded");
+            }
+
             if (item.ToBank > 0)
             {
                 sb.Append($" - {item.ToBank:N0} sent to bank");

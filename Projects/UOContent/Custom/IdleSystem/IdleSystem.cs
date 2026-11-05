@@ -116,6 +116,19 @@ public class IdleSystem : GenericPersistence
                 continue;
             }
 
+            foreach (var name in def.DiscardItems)
+            {
+                var type = AssemblyHandler.FindTypeByName(name);
+                if (type == null)
+                {
+                    logger.Warning("Idle task {Id}: unknown discard item type {Type}", def.Id, name);
+                }
+                else
+                {
+                    def.DiscardTypes.Add(type);
+                }
+            }
+
             _tasks[def.Id] = def;
         }
 

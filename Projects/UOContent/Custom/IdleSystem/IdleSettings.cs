@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 
 namespace Server.Custom.Idle;
 
@@ -79,6 +80,15 @@ public class IdleTaskDefinition
     /// Target = only the vein under the chosen spot.
     /// </summary>
     public IdleVeinMode VeinMode { get; set; } = IdleVeinMode.Average;
+
+    /// <summary>
+    /// Item type names the character throws away instead of keeping (e.g. old boots from fishing), so junk cannot
+    /// fill the 125-item bank box. Discards are still listed in the summary.
+    /// </summary>
+    public List<string> DiscardItems { get; set; } = new();
+
+    [JsonIgnore]
+    public HashSet<Type> DiscardTypes { get; } = new();
 }
 
 public enum IdleVeinMode

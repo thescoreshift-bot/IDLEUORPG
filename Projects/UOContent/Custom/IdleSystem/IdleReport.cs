@@ -47,7 +47,11 @@ public class IdleItemLine
     public int Amount { get; init; }
     public int ToPack { get; set; }
     public int ToBank { get; set; }
-    public int Lost => Amount - ToPack - ToBank;
+
+    /// <summary>Thrown away on purpose (task's DiscardItems), so it is neither delivered nor counted as lost.</summary>
+    public bool Discarded { get; set; }
+
+    public int Lost => Discarded ? 0 : Amount - ToPack - ToBank;
 }
 
 public record IdleSkillLine(string Name, double From, double To);

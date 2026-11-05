@@ -48,6 +48,11 @@ public class HarvestIdleHandler : IdleTaskHandler
             return false;
         }
 
+        if (system is Fishing && !FishingIdleRules.TryLoad(out error))
+        {
+            return false;
+        }
+
         _bound[def.Id] = (system, definition);
         error = null;
         return true;
@@ -77,7 +82,7 @@ public class HarvestIdleHandler : IdleTaskHandler
     /// <summary>Checks the map itself at the target, so named locations and API requests are held to the same rule as clicks.</summary>
     public override bool ValidateTarget(PlayerMobile pm, IdleTaskDefinition def, IdleTarget target, out string error)
     {
-        var definition = Get(def).Definition;
+        var (system, definition) = Get(def);
         var map = target.Map;
 
         if (map == null || map == Map.Internal)
@@ -88,6 +93,13 @@ public class HarvestIdleHandler : IdleTaskHandler
 
         var x = target.Location.X;
         var y = target.Location.Y;
+
+        // Deep-water specials (maps, bottles, nets) arrive on a sea serpent that must be killed, which cannot happen offline.
+        if (system is Fishing && FishingIdleRules.IsDeepWater(map, x, y))
+        {
+            error = "Idle fishing only works in shallow water near the shore.";
+            return false;
+        }
 
         if (definition.Validate(map.Tiles.GetLandTile(x, y).ID & TileData.MaxLandValue, true))
         {
@@ -192,6 +204,8 @@ public class HarvestIdleRun : IdleTaskRun
     private readonly int _unitsPerSuccess;
     private readonly int _successesAllowed;
     private readonly Dictionary<Type, bool> _stackable = new();
+    private readonly List<(Type, double)> _shares = new();
+    private readonly List<(Type, double)> _fishShares = new();
 
     public HarvestIdleRun(
         PlayerMobile pm, IdleTaskDefinition def, HarvestSystem system, HarvestDefinition definition, IdleTarget target,
@@ -320,18 +334,16 @@ public class HarvestIdleRun : IdleTaskRun
         var successes = weight * Math.Clamp(chance, 0.0, 1.0);
         var unitsConsumed = 0.0;
 
-        var types = resource.Types;
-        var stoneChance = GetAlternateTypeChance(skillBase);
+        _shares.Clear();
+        GetCatchShares(resource, skillBase, skillValue, _shares);
 
-        for (var i = 0; i < types.Length; i++)
+        foreach (var (type, share) in _shares)
         {
-            var share = GetTypeShare(types.Length, i, stoneChance);
             if (share <= 0)
             {
                 continue;
             }
 
-            var type = _region.GetResource(types[i]);
             var units = IsStackable(type) ? _unitsPerSuccess : 1;
             model.AddYield(type, successes * share * units);
             unitsConsumed += successes * share * units;
@@ -375,6 +387,37 @@ public class HarvestIdleRun : IdleTaskRun
             1 => stoneChance,
             _ => 0.0
         };
+    }
+
+    /// <summary>
+    /// What one success turns into. Fishing replaces the whole of HarvestSystem.MutateType with its catch table, so the
+    /// region swap does not apply there; every other system keeps the base GetResourceType + region swap.
+    /// </summary>
+    private void GetCatchShares(HarvestResource resource, double skillBase, double skillValue, List<(Type, double)> shares)
+    {
+        var types = resource.Types;
+
+        if (_system is Fishing)
+        {
+            foreach (var type in types)
+            {
+                _fishShares.Clear();
+                FishingIdleRules.AddCatchShares(type, skillBase, skillValue, _fishShares);
+
+                foreach (var (caught, share) in _fishShares)
+                {
+                    shares.Add((caught, share / types.Length));
+                }
+            }
+
+            return;
+        }
+
+        var stoneChance = GetAlternateTypeChance(skillBase);
+        for (var i = 0; i < types.Length; i++)
+        {
+            shares.Add((_region.GetResource(types[i]), GetTypeShare(types.Length, i, stoneChance)));
+        }
     }
 
     private bool IsStackable(Type type)
@@ -447,6 +490,11 @@ public class HarvestIdleRun : IdleTaskRun
                 ? $"Tools: {_tools.Count}, no wear"
                 : $"Tools: {_tools.Count}, {_successesAllowed:N0} uses (1 per success)"
         );
+
+        if (_system is Fishing)
+        {
+            notes.Add("Catches: Fishing's own shallow-water table (footwear, magic fish); no deep-water specials offline");
+        }
 
         if (IsMiningOre)
         {
