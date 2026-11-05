@@ -200,14 +200,20 @@ public static class IdleSettlement
 
         report.WeightLimit = pm.MaxWeight;
         report.WeightBefore = CarriedWeight(pm);
+        report.KeepFreeStones = Math.Max(0, settings.KeepFreeStones);
+
+        // The reserve only limits what idle work adds; a character already inside it keeps what they carry.
+        report.PackLimit = Math.Max(report.WeightLimit - report.KeepFreeStones, report.WeightBefore);
 
         if (mode != IdleSettleMode.Preview)
         {
             logger.Information(
-                "Idle weight {Player}: before delivery {Weight}/{Max} (body {Body} + items {Items}, Str {Str})",
+                "Idle weight {Player}: before delivery {Weight}/{Max}, pack limit {Limit} (reserve {Reserve}; body {Body} + items {Items}, Str {Str})",
                 pm,
                 report.WeightBefore,
                 report.WeightLimit,
+                report.PackLimit,
+                report.KeepFreeStones,
                 Mobile.BodyWeight,
                 pm.TotalWeight,
                 pm.Str
@@ -218,7 +224,7 @@ public static class IdleSettlement
         {
             var amount = RoundRandom(expected);
             var discard = def.DiscardTypes.Contains(type);
-            var line = Deliver(pm, type, amount, mode != IdleSettleMode.Preview && !discard);
+            var line = Deliver(pm, type, amount, mode != IdleSettleMode.Preview && !discard, report.PackLimit);
             if (line != null)
             {
                 report.Items.Add(line);
@@ -240,9 +246,12 @@ public static class IdleSettlement
                 $"Weight rule: body {Mobile.BodyWeight} + everything carried (equipped items, the backpack and its contents) must stay at or below max {report.WeightLimit} (40 + 3.5 x Str {pm.Str})"
             );
             notes.Add(
+                $"Reserve: idle work fills the pack only up to {report.PackLimit} (max {report.WeightLimit} - KeepFreeStones {report.KeepFreeStones}, never below the weight already carried)"
+            );
+            notes.Add(
                 mode == IdleSettleMode.Preview
-                    ? $"Weight: {report.WeightBefore} / {report.WeightLimit} now; room for {Math.Max(0, report.WeightLimit - report.WeightBefore)} stones (preview places nothing)"
-                    : $"Weight: {report.WeightBefore} -> {report.WeightAfter} / {report.WeightLimit}"
+                    ? $"Weight: {report.WeightBefore} / {report.WeightLimit} now, reserve {report.KeepFreeStones}; room for {report.PackLimit - report.WeightBefore} stones (preview places nothing)"
+                    : $"Weight: {report.WeightBefore} -> {report.WeightAfter} / {report.WeightLimit}, reserve {report.KeepFreeStones}"
             );
         }
 
@@ -434,7 +443,7 @@ public static class IdleSettlement
     }
 
     /// <summary>Backpack first (its limits and the character's carry limit), then bank box; the rest is lost.</summary>
-    private static IdleItemLine Deliver(PlayerMobile pm, Type type, int amount, bool place)
+    private static IdleItemLine Deliver(PlayerMobile pm, Type type, int amount, bool place, int limit)
     {
         if (amount <= 0)
         {
@@ -467,12 +476,12 @@ public static class IdleSettlement
 
         var remaining = stackable ? amount : Math.Min(amount, MaxNonStackable);
 
-        line.ToPack = Place(pm.Backpack, pm, type, stackable, remaining);
+        line.ToPack = Place(pm.Backpack, pm, type, stackable, remaining, limit);
         remaining -= line.ToPack;
 
         if (remaining > 0)
         {
-            line.ToBank = Place(pm.BankBox, pm, type, stackable, remaining);
+            line.ToBank = Place(pm.BankBox, pm, type, stackable, remaining, limit);
         }
 
         logger.Information(
@@ -506,7 +515,7 @@ public static class IdleSettlement
         var pack = pm.Backpack;
         var bank = pm.BankBox;
 
-        if (pack == null || bank == null || pm.AccessLevel >= AccessLevel.GameMaster || CarriedWeight(pm) <= pm.MaxWeight)
+        if (pack == null || bank == null || pm.AccessLevel >= AccessLevel.GameMaster || CarriedWeight(pm) <= report.PackLimit)
         {
             return;
         }
@@ -521,7 +530,7 @@ public static class IdleSettlement
         }
 
         var items = pack.Items;
-        for (var i = items.Count - 1; i >= 0 && CarriedWeight(pm) > pm.MaxWeight; i--)
+        for (var i = items.Count - 1; i >= 0 && CarriedWeight(pm) > report.PackLimit; i--)
         {
             var item = items[i];
             if (!types.Contains(item.GetType()) || !bank.CheckHold(pm, item, false, true))
@@ -562,7 +571,7 @@ public static class IdleSettlement
             );
         }
 
-        if (CarriedWeight(pm) > pm.MaxWeight)
+        if (CarriedWeight(pm) > report.PackLimit)
         {
             logger.Warning(
                 "Idle weight {Player}: still overloaded at {Weight}/{Max} after the safety pass",
@@ -573,7 +582,7 @@ public static class IdleSettlement
         }
     }
 
-    private static int Place(Container container, PlayerMobile pm, Type type, bool stackable, int amount)
+    private static int Place(Container container, PlayerMobile pm, Type type, bool stackable, int amount, int limit)
     {
         if (container == null)
         {
@@ -592,7 +601,7 @@ public static class IdleSettlement
 
             if (stackable)
             {
-                var fit = LargestFit(container, pm, item, Math.Min(amount - placed, MaxStack));
+                var fit = LargestFit(container, pm, item, Math.Min(amount - placed, MaxStack), limit);
                 if (fit == 0)
                 {
                     item.Delete();
@@ -601,7 +610,7 @@ public static class IdleSettlement
 
                 item.Amount = fit;
             }
-            else if (!Fits(container, pm, item))
+            else if (!Fits(container, pm, item, limit))
             {
                 item.Delete();
                 break;
@@ -632,10 +641,10 @@ public static class IdleSettlement
         return placed;
     }
 
-    private static int LargestFit(Container container, PlayerMobile pm, Item item, int max)
+    private static int LargestFit(Container container, PlayerMobile pm, Item item, int max, int limit)
     {
         item.Amount = max;
-        if (Fits(container, pm, item))
+        if (Fits(container, pm, item, limit))
         {
             return max;
         }
@@ -646,7 +655,7 @@ public static class IdleSettlement
             var mid = (lo + hi + 1) / 2;
             item.Amount = mid;
 
-            if (Fits(container, pm, item))
+            if (Fits(container, pm, item, limit))
             {
                 lo = mid;
             }
@@ -663,14 +672,14 @@ public static class IdleSettlement
     /// The container's own limits, plus, for anything the character carries, the character's weight limit, so offline
     /// gains never leave them overloaded. Staff skip container limits (as online) but not the carry limit.
     /// </summary>
-    private static bool Fits(Container container, PlayerMobile pm, Item item)
+    private static bool Fits(Container container, PlayerMobile pm, Item item, int limit)
     {
         if (!container.CheckHold(pm, item, false, true))
         {
             return false;
         }
 
-        return container is BankBox || CarriedWeight(pm) + item.PileWeight + item.TotalWeight <= pm.MaxWeight;
+        return container is BankBox || CarriedWeight(pm) + item.PileWeight + item.TotalWeight <= limit;
     }
 
     private static Item Construct(Type type)

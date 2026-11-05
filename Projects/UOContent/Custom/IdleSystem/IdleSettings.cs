@@ -22,6 +22,9 @@ public class IdleSettings
 
     public bool ShowSummaryGump { get; set; } = true;
 
+    /// <summary>Stones of carrying capacity idle deliveries leave free; the rest goes to the bank.</summary>
+    public int KeepFreeStones { get; set; } = 20;
+
     public IdleSkillGainSettings SkillGain { get; set; } = new();
 }
 

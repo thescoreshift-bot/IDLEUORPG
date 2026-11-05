@@ -28,6 +28,10 @@ public class IdleReport
     public int WeightAfter { get; set; }
     public int WeightLimit { get; set; }
 
+    /// <summary>Configured free-weight reserve, and the weight idle delivery fills the pack up to.</summary>
+    public int KeepFreeStones { get; set; }
+    public int PackLimit { get; set; }
+
     /// <summary>Stacks the weight safety pass moved from the backpack to the bank.</summary>
     public List<IdleMoveLine> MovedToBank { get; } = new();
 

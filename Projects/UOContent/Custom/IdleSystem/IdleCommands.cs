@@ -261,7 +261,7 @@ public static class IdleCommands
             {
                 from.SendMessage(
                     0x59,
-                    $"Weight: {report.WeightBefore} -> {report.WeightAfter} / {report.WeightLimit} stones (as the status bar shows it)"
+                    $"Weight: {report.WeightBefore} -> {report.WeightAfter} / {report.WeightLimit}, reserve {report.KeepFreeStones} (as the status bar shows it)"
                 );
             }
 
