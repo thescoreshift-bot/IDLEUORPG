@@ -14,7 +14,7 @@ public static class IdleCommands
         CommandSystem.Register("IdleSim", AccessLevel.GameMaster, IdleSim_OnCommand);
     }
 
-    [Usage("Idle [stop | status | list | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]")]
+    [Usage("Idle [stop | status | list | recipes [filter] | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]")]
     [Description(
         "Choose the spot your character works while you are logged out. With no argument, target the spot. " +
         "smelt/craft start an order where you stand; 'at <location>' can be followed by the same order."
@@ -65,10 +65,15 @@ public static class IdleCommands
                     StartHere(pm, e);
                     break;
                 }
+            case "recipes":
+                {
+                    SendRecipes(pm, e.Length > 1 ? e.GetString(1) : null);
+                    break;
+                }
             default:
                 {
                     pm.SendMessage(
-                        "Usage: [Idle [stop | status | list | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]"
+                        "Usage: [Idle [stop | status | list | recipes [filter] | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]"
                     );
                     break;
                 }
@@ -258,6 +263,54 @@ public static class IdleCommands
         else
         {
             pm.SendMessage(0x22, $"If you log out now: {IdleSystem.GetResultMessage(result)}");
+        }
+    }
+
+    /// <summary>Recipes of every craft task, with this character's current success chance.</summary>
+    private static void SendRecipes(PlayerMobile pm, string filter)
+    {
+        var shown = 0;
+
+        foreach (var def in IdleSystem.Tasks.Values)
+        {
+            var system = def.Kind.InsensitiveEquals("Craft") ? CraftIdleHandler.GetSystem(def) : null;
+            if (system == null)
+            {
+                continue;
+            }
+
+            pm.SendMessage(0x35, $"{def.Name} recipes ([Idle craft <id> <amount> [material]):");
+
+            foreach (var recipe in IdleRecipes.GetRecipes(system))
+            {
+                if (filter != null && !recipe.Id.InsensitiveContains(filter) && !recipe.Name.InsensitiveContains(filter) &&
+                    !recipe.Group.InsensitiveContains(filter))
+                {
+                    continue;
+                }
+
+                using var cost = ValueStringBuilder.Create();
+                foreach (var res in recipe.Resources)
+                {
+                    if (cost.Length > 0)
+                    {
+                        cost.Append(", ");
+                    }
+
+                    cost.Append($"{res.Amount} {res.Name}");
+                }
+
+                var chance = Math.Clamp(recipe.CraftItem.GetSuccessChance(pm, null, system, false, out _), 0.0, 1.0);
+                pm.SendMessage(
+                    $"{recipe.Id}: {recipe.Name} ({recipe.Group}), {recipe.MinSkill:F1}-{recipe.MaxSkill:F1}, {cost.AsSpan()}, your chance {chance:P0}"
+                );
+                shown++;
+            }
+        }
+
+        if (shown == 0)
+        {
+            pm.SendMessage("No recipes match.");
         }
     }
 

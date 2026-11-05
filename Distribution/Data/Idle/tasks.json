@@ -60,6 +60,20 @@
       "SkillGainMultiplier": 1.0,
       // One double-click on a pile plus targeting the forge.
       "SecondsPerAttempt": 1.5
+    },
+    {
+      "Id": "blacksmithing",
+      "Name": "Blacksmithing",
+      // Takes an order: [Idle craft <recipe> <amount> [material]. Recipes, skill ranges, costs, and the success and
+      // exceptional chances come from the server's live blacksmithing table; [Idle recipes lists them.
+      // Needs an anvil and a forge within 2 tiles and a smith's hammer, tongs, or sledgehammer in hand or backpack.
+      // Ingots come from the backpack first, then the bank box.
+      "Kind": "Craft",
+      "CraftSystem": "Blacksmithy",
+      "Rate": 1.0,
+      "SkillGainMultiplier": 1.0,
+      // The craft takes 1.25s online plus choosing the item again in the menu.
+      "SecondsPerAttempt": 2.0
     }
   ],
 
