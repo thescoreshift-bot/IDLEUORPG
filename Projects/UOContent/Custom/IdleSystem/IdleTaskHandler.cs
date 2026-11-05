@@ -103,8 +103,28 @@ public abstract class IdleDiscreteTaskRun : IdleTaskRun
     {
     }
 
-    /// <summary>Works until the time, materials, tools, room, or order run out; sets the report's stop reason.</summary>
-    public abstract void Run(IdleDiscreteContext context);
+    /// <summary>
+    /// Makes one attempt. Returns false, without attempting, when work cannot go on (time, materials, tools, room,
+    /// or the order ran out). Offline settlement loops it; live work calls it once per tick.
+    /// </summary>
+    public abstract bool Step(IdleDiscreteContext context);
+
+    /// <summary>
+    /// Delivers anything batched, and writes the stop reason and order progress. Safe to call after every step.
+    /// </summary>
+    public virtual void Complete(IdleDiscreteContext context)
+    {
+    }
+
+    /// <summary>Works until a step says to stop.</summary>
+    public void Run(IdleDiscreteContext context)
+    {
+        while (Step(context))
+        {
+        }
+
+        Complete(context);
+    }
 }
 
 /// <summary>

@@ -480,7 +480,7 @@ public static class IdleSettlement
     }
 
     /// <summary>Backpack first (its limits and the character's carry limit), then bank box; the rest is lost.</summary>
-    internal static IdleItemLine Deliver(PlayerMobile pm, Type type, int amount, bool place, int limit)
+    internal static IdleItemLine Deliver(PlayerMobile pm, Type type, int amount, bool place, int limit, bool log = true)
     {
         if (amount <= 0)
         {
@@ -513,12 +513,17 @@ public static class IdleSettlement
 
         var remaining = stackable ? amount : Math.Min(amount, MaxNonStackable);
 
-        line.ToPack = Place(pm.Backpack, pm, type, stackable, remaining, limit);
+        line.ToPack = Place(pm.Backpack, pm, type, stackable, remaining, limit, log);
         remaining -= line.ToPack;
 
         if (remaining > 0)
         {
-            line.ToBank = Place(pm.BankBox, pm, type, stackable, remaining, limit);
+            line.ToBank = Place(pm.BankBox, pm, type, stackable, remaining, limit, log);
+        }
+
+        if (!log)
+        {
+            return line;
         }
 
         logger.Information(
@@ -620,7 +625,7 @@ public static class IdleSettlement
         }
     }
 
-    private static int Place(Container container, PlayerMobile pm, Type type, bool stackable, int amount, int limit)
+    private static int Place(Container container, PlayerMobile pm, Type type, bool stackable, int amount, int limit, bool log)
     {
         if (container == null)
         {
@@ -663,7 +668,7 @@ public static class IdleSettlement
 
             placed += stackable ? count : 1;
 
-            if (stackable && container is not BankBox)
+            if (log && stackable && container is not BankBox)
             {
                 logger.Information(
                     "Idle deliver {Player}: pack step +{Count}, {Placed} placed so far; weight now {Weight}/{Max}",

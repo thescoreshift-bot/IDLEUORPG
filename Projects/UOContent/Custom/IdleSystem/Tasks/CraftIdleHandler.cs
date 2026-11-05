@@ -330,173 +330,208 @@ public class CraftIdleRun : IdleDiscreteTaskRun
         notes.Add($"Failure: {failShare} of the materials are lost; every attempt uses one tool charge; {_def.SecondsPerAttempt:0.##}s per attempt");
     }
 
-    public override void Run(IdleDiscreteContext context)
+    // Work state, kept between steps so live (online) work can run one attempt per tick.
+    private bool _started;
+    private List<(Type[] Types, int Amount, string Name)> _costs;
+    private int[] _available;
+    private List<BaseTool> _tools;
+    private int[] _uses;
+    private int _toolIndex;
+    private int _toolUses;
+    private int _reportedToolUses;
+    private int _left;
+    private int _made;
+    private string _stop;
+    private Skill _mainSkill;
+    private CraftContext _craftContext;
+    private Item _sample;
+    private IdleItemLine _line;
+
+    public override bool Step(IdleDiscreteContext context)
     {
         if (_recipe == null || _system == null)
         {
             context.Report.StopReason = "That recipe is no longer available.";
-            return;
+            return false;
         }
 
         var item = _recipe.CraftItem;
-        var costs = CraftIdleHandler.GetCosts(_system, item, _typeRes);
-        var available = new int[costs.Count];
-        for (var i = 0; i < costs.Count; i++)
+
+        if (!_started)
         {
-            available[i] = CraftIdleHandler.CountMaterial(_pm, costs[i].Types);
+            _started = true;
+            _costs = CraftIdleHandler.GetCosts(_system, item, _typeRes);
+            _left = _order.Remaining;
+            _mainSkill = _pm.Skills[_system.MainSkill];
+            _craftContext = _system.GetContext(_pm);
+            ReadSupplies();
+        }
+        else if (context.Online)
+        {
+            // Live, the player may add or move ingots and tools between attempts.
+            ReadSupplies();
         }
 
-        CraftIdleHandler.FindTools(_pm, _system, out var tools, out _);
-        var uses = new int[tools.Count];
-        for (var i = 0; i < tools.Count; i++)
+        if (_sample?.Deleted != false)
         {
-            uses[i] = tools[i].UsesRemaining;
+            _sample = item.ItemType.CreateInstance<Item>();
+            _line = context.GetLine(_sample);
         }
 
-        var toolIndex = 0;
-        var toolUses = 0;
-        var left = _order.Remaining;
-        var made = 0;
-        string stop = null;
-
-        var mainSkill = _pm.Skills[_system.MainSkill];
-        var craftContext = _system.GetContext(_pm);
-        var sample = _recipe.CraftItem.ItemType.CreateInstance<Item>();
-        var line = context.GetLine(sample);
-
-        while (left > 0)
+        if (_left <= 0)
         {
-            while (toolIndex < tools.Count && uses[toolIndex] <= 0)
-            {
-                toolIndex++;
-            }
+            return false;
+        }
 
-            if (toolIndex >= tools.Count)
-            {
-                stop = "Your tools wore out.";
-                break;
-            }
+        while (_toolIndex < _tools.Count && _uses[_toolIndex] <= 0)
+        {
+            _toolIndex++;
+        }
 
-            var missing = -1;
-            for (var i = 0; i < costs.Count; i++)
+        if (_toolIndex >= _tools.Count)
+        {
+            _stop = "Your tools wore out.";
+            return false;
+        }
+
+        for (var i = 0; i < _costs.Count; i++)
+        {
+            if (_available[i] < _costs[i].Amount)
             {
-                if (available[i] < costs[i].Amount)
+                _stop = $"You ran out of {_costs[i].Name}.";
+                return false;
+            }
+        }
+
+        if (!context.HasRoomFor(_sample))
+        {
+            _stop = "There is no more room in your backpack or bank box.";
+            return false;
+        }
+
+        if (!context.TrySpend(_def.SecondsPerAttempt))
+        {
+            _stop = "time";
+            return false;
+        }
+
+        context.Attempts++;
+
+        // The craft timer rolls quality first (CheckSkills without gains); CompleteCraft then does the skill
+        // checks and the success roll on the chance from before those checks.
+        var chance = item.GetSuccessChance(_pm, _typeRes, _system, false, out _);
+        var quality = item.GetExceptionalChance(_system, chance, _pm) > Utility.RandomDouble() ? 2 : 1;
+
+        foreach (var craftSkill in item.Skills)
+        {
+            context.CheckSkill(craftSkill.SkillToMake, craftSkill.MinSkill, craftSkill.MaxSkill);
+        }
+
+        var success = chance > Utility.RandomDouble();
+        var tool = _tools[_toolIndex];
+
+        for (var i = 0; i < _costs.Count; i++)
+        {
+            var amount = _costs[i].Amount;
+            if (!success)
+            {
+                if (!_system.ConsumeOnFailure(_pm, _costs[i].Types[0], item))
                 {
-                    missing = i;
-                    break;
+                    amount = 0;
+                }
+                else if (!Core.UOTD)
+                {
+                    amount -= amount / 2;
                 }
             }
 
-            if (missing >= 0)
-            {
-                stop = $"You ran out of {costs[missing].Name}.";
-                break;
-            }
-
-            if (!context.HasRoomFor(sample))
-            {
-                stop = "There is no more room in your backpack or bank box.";
-                break;
-            }
-
-            if (!context.TrySpend(_def.SecondsPerAttempt))
-            {
-                stop = "time";
-                break;
-            }
-
-            context.Attempts++;
-
-            // The craft timer rolls quality first (CheckSkills without gains); CompleteCraft then does the skill
-            // checks and the success roll on the chance from before those checks.
-            var chance = item.GetSuccessChance(_pm, _typeRes, _system, false, out _);
-            var quality = item.GetExceptionalChance(_system, chance, _pm) > Utility.RandomDouble() ? 2 : 1;
-
-            foreach (var craftSkill in item.Skills)
-            {
-                context.CheckSkill(craftSkill.SkillToMake, craftSkill.MinSkill, craftSkill.MaxSkill);
-            }
-
-            var success = chance > Utility.RandomDouble();
-            var tool = tools[toolIndex];
-
-            for (var i = 0; i < costs.Count; i++)
-            {
-                var amount = costs[i].Amount;
-                if (!success)
-                {
-                    if (!_system.ConsumeOnFailure(_pm, costs[i].Types[0], item))
-                    {
-                        amount = 0;
-                    }
-                    else if (!Core.UOTD)
-                    {
-                        amount -= amount / 2;
-                    }
-                }
-
-                available[i] -= amount;
-                context.AddUsed(costs[i].Name, amount);
-
-                if (!context.Preview)
-                {
-                    CraftIdleHandler.ConsumeMaterial(_pm, costs[i].Types, amount);
-                }
-            }
-
-            uses[toolIndex]--;
-            toolUses++;
+            _available[i] -= amount;
+            context.AddUsed(_costs[i].Name, amount);
 
             if (!context.Preview)
             {
-                WearTool(tool, success);
+                CraftIdleHandler.ConsumeMaterial(_pm, _costs[i].Types, amount);
             }
-
-            if (!success)
-            {
-                continue;
-            }
-
-            context.Successes++;
-            made++;
-            left--;
-
-            Item result;
-            if (context.Preview)
-            {
-                result = item.ItemType.CreateInstance<Item>();
-            }
-            else
-            {
-                result = Create(item, quality, mainSkill, craftContext, tool);
-            }
-
-            if (quality == 2)
-            {
-                line.Exceptional++;
-            }
-
-            line.Amount++;
-            context.Deliver(result, line);
         }
 
-        sample.Delete();
+        _uses[_toolIndex]--;
+        _toolUses++;
 
-        context.AddUsed("tool charges", toolUses);
-
-        if (stop != null && stop != "time")
+        if (!context.Preview)
         {
-            context.Report.StopReason = stop;
+            WearTool(tool, success);
+
+            if (tool.Deleted)
+            {
+                context.Notify("Your tool has worn out.");
+            }
+        }
+
+        if (!success)
+        {
+            return true;
+        }
+
+        context.Successes++;
+        _made++;
+        _left--;
+
+        var result = context.Preview ? item.ItemType.CreateInstance<Item>() : Create(item, quality, _mainSkill, _craftContext, tool);
+
+        if (quality == 2)
+        {
+            _line.Exceptional++;
+            context.Notify($"You create an exceptional {_line.Name}.");
+        }
+
+        _line.Amount++;
+        context.Deliver(result, _line);
+        return true;
+    }
+
+    private void ReadSupplies()
+    {
+        _available = new int[_costs.Count];
+        for (var i = 0; i < _costs.Count; i++)
+        {
+            _available[i] = CraftIdleHandler.CountMaterial(_pm, _costs[i].Types);
+        }
+
+        CraftIdleHandler.FindTools(_pm, _system, out _tools, out _);
+        _uses = new int[_tools.Count];
+        for (var i = 0; i < _tools.Count; i++)
+        {
+            _uses[i] = _tools[i].UsesRemaining;
+        }
+
+        _toolIndex = 0;
+    }
+
+    public override void Complete(IdleDiscreteContext context)
+    {
+        if (!_started)
+        {
+            return;
+        }
+
+        _sample?.Delete();
+
+        context.AddUsed("tool charges", _toolUses - _reportedToolUses);
+        _reportedToolUses = _toolUses;
+
+        if (_stop != null && _stop != "time")
+        {
+            context.Report.StopReason = _stop;
         }
 
         if (!context.Preview)
         {
-            _order.Remaining = left;
+            _order.Remaining = _left;
         }
 
-        context.Report.OrderStatus = left == 0
+        context.Report.OrderStatus = _left == 0
             ? $"{_order.Requested:N0} {_recipe.Name} made, order complete"
-            : $"{made:N0} made this time, {left:N0} of {_order.Requested:N0} left{(stop == "time" ? " (continues next time)" : "")}";
+            : $"{_made:N0} made this time, {_left:N0} of {_order.Requested:N0} left{(_stop == "time" ? " (continues next time)" : "")}";
     }
 
     /// <summary>The real item, finished by its own OnCraft so quality, resource, and maker's mark match online.</summary>

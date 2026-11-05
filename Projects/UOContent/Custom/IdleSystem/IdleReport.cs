@@ -8,7 +8,7 @@ public class IdleReport
 {
     public string TaskName { get; init; }
     public IdleSettleMode Mode { get; init; }
-    public bool Simulated => Mode != IdleSettleMode.Login;
+    public bool Simulated => Mode is IdleSettleMode.Simulate or IdleSettleMode.Preview;
     public TimeSpan Away { get; init; }
     public TimeSpan Counted { get; init; }
     public bool Capped => Away > Counted;
@@ -57,7 +57,10 @@ public enum IdleSettleMode
     Simulate,
 
     /// <summary>Staff simulation that only reports; skills, stats, tools, and items are left untouched.</summary>
-    Preview
+    Preview,
+
+    /// <summary>Live work while the character is in the world, one attempt per tick.</summary>
+    Online
 }
 
 public class IdleItemLine

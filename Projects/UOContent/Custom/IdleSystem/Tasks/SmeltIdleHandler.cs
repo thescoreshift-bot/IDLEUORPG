@@ -180,108 +180,154 @@ public class SmeltIdleRun : IdleDiscreteTaskRun
         notes.Add("Success: the whole pile becomes ingots (large ore x2, small ore 1 per 2). Failure: half the pile burns away and it is tried again");
     }
 
-    public override void Run(IdleDiscreteContext context)
-    {
-        var remaining = _order.Remaining;
-        var ingots = new Dictionary<Type, int>();
-        var burnt = 0;
-        string stop = null;
+    // Work state, kept between steps so live (online) work can run one attempt per tick.
+    private List<BaseOre> _piles;
+    private int _pileIndex;
+    private BaseOre _pile;
+    private int _take;
+    private int _amount;
+    private int _itemId;
+    private double _minSkill;
+    private double _maxSkill;
+    private int _remaining;
+    private int _startRemaining;
+    private int _burnt;
+    private bool _outOfOre;
+    private bool _outOfTime;
+    private readonly Dictionary<Type, int> _ingots = new();
 
-        foreach (var pile in SmeltIdleHandler.FindOre(_pm))
+    public override bool Step(IdleDiscreteContext context)
+    {
+        if (_piles == null)
         {
-            if (remaining <= 0 || stop != null)
+            _piles = SmeltIdleHandler.FindOre(_pm);
+            _remaining = _startRemaining = _order.Remaining;
+        }
+
+        while (true)
+        {
+            if (_pile == null && !NextPile())
             {
-                break;
+                return false;
             }
 
-            if (!SmeltIdleHandler.CanSmelt(_pm, pile))
+            if (_amount <= 0 || _itemId == SmeltIdleHandler.SmallOre && _amount < 2)
+            {
+                FinishPile(context); // Not enough metal-bearing ore left in this pile to make an ingot.
+                continue;
+            }
+
+            if (!context.TrySpend(_def.SecondsPerAttempt))
+            {
+                _outOfTime = true;
+
+                if (_amount != _take)
+                {
+                    FinishPile(context);
+                }
+
+                return false;
+            }
+
+            context.Attempts++;
+
+            // CheckTargetSkill(Mining, forge, min, max): the gain roll, then the success roll on the same chance.
+            context.CheckSkill(SkillName.Mining, _minSkill, _maxSkill);
+            var chance = (_pm.Skills.Mining.Value - _minSkill) / (_maxSkill - _minSkill);
+
+            if (chance > Utility.RandomDouble())
+            {
+                context.Successes++;
+                var made = SmeltIdleHandler.GetIngots(_itemId, _amount, out var consumed);
+                var ingotType = GetIngotType(_pile);
+                _ingots[ingotType] = _ingots.GetValueOrDefault(ingotType) + made;
+                _amount -= consumed;
+                FinishPile(context);
+                return true;
+            }
+
+            var kept = SmeltIdleHandler.Burn(ref _itemId, _amount);
+            _burnt += _amount - kept;
+            _amount = kept;
+            return true;
+        }
+    }
+
+    private bool NextPile()
+    {
+        if (_remaining <= 0)
+        {
+            return false;
+        }
+
+        while (_pileIndex < _piles.Count)
+        {
+            var pile = _piles[_pileIndex++];
+            if (pile.Deleted || !SmeltIdleHandler.CanSmelt(_pm, pile))
             {
                 continue;
             }
 
             var difficulty = SmeltIdleHandler.GetDifficulty(pile.Resource);
-            var minSkill = difficulty - 25.0;
-            var maxSkill = difficulty + 25.0;
+            _minSkill = difficulty - 25.0;
+            _maxSkill = difficulty + 25.0;
+            _pile = pile;
+            _take = Math.Min(pile.Amount, _remaining);
+            _amount = _take;
+            _itemId = pile.ItemID;
+            return true;
+        }
 
-            var take = Math.Min(pile.Amount, remaining);
-            var amount = take;
-            var itemId = pile.ItemID;
+        _outOfOre = true;
+        return false;
+    }
 
-            while (amount > 0)
+    private void FinishPile(IdleDiscreteContext context)
+    {
+        var used = _take - _amount;
+
+        // A pile cut short by time keeps its rest for next time; otherwise the leftover (a single small ore) is done.
+        _remaining -= _outOfTime ? used : _take;
+        context.AddUsed(IdleSettlement.GetName(_pile), used);
+
+        if (!context.Preview)
+        {
+            var wholePile = _take == _pile.Amount;
+            _pile.Consume(used);
+
+            if (wholePile && !_pile.Deleted)
             {
-                if (itemId == SmeltIdleHandler.SmallOre && amount < 2)
-                {
-                    break; // Not enough metal-bearing ore left in this pile to make an ingot.
-                }
-
-                if (!context.TrySpend(_def.SecondsPerAttempt))
-                {
-                    stop = "time";
-                    break;
-                }
-
-                context.Attempts++;
-
-                // CheckTargetSkill(Mining, forge, min, max): the gain roll, then the success roll on the same chance.
-                context.CheckSkill(SkillName.Mining, minSkill, maxSkill);
-                var chance = (_pm.Skills.Mining.Value - minSkill) / (maxSkill - minSkill);
-
-                if (chance > Utility.RandomDouble())
-                {
-                    context.Successes++;
-                    var made = SmeltIdleHandler.GetIngots(itemId, amount, out var consumed);
-                    var ingotType = GetIngotType(pile);
-                    ingots[ingotType] = ingots.GetValueOrDefault(ingotType) + made;
-                    amount -= consumed;
-                    break;
-                }
-
-                var kept = SmeltIdleHandler.Burn(ref itemId, amount);
-                burnt += amount - kept;
-                amount = kept;
-            }
-
-            if (stop != null && amount == take)
-            {
-                break; // Ran out of time before touching this pile.
-            }
-
-            var used = take - amount;
-
-            // A pile cut short by time keeps its rest for next time; otherwise the leftover (a single small ore) is done.
-            remaining -= stop == "time" ? used : take;
-            context.AddUsed(IdleSettlement.GetName(pile), used);
-
-            if (!context.Preview)
-            {
-                var wholePile = take == pile.Amount;
-                pile.Consume(used);
-
-                if (wholePile && !pile.Deleted)
-                {
-                    pile.ItemID = itemId;
-                }
+                _pile.ItemID = _itemId;
             }
         }
 
-        if (stop == null && remaining > 0)
+        _pile = null;
+    }
+
+    public override void Complete(IdleDiscreteContext context)
+    {
+        if (_piles == null)
+        {
+            return;
+        }
+
+        if (!_outOfTime && _outOfOre && _remaining > 0)
         {
             context.Report.StopReason = "You ran out of ore you know how to smelt.";
         }
 
-        foreach (var (type, amount) in ingots)
+        foreach (var (type, amount) in _ingots)
         {
-            var line = IdleSettlement.Deliver(_pm, type, amount, !context.Preview, context.Report.PackLimit);
-            if (line != null)
-            {
-                context.Report.Items.Add(line);
-            }
+            var line = IdleSettlement.Deliver(_pm, type, amount, !context.Preview, context.Report.PackLimit, !context.Online);
+            context.MergeLine(line);
         }
 
-        context.Notes?.Add($"Ore burnt away by failed smelts: {burnt:N0}");
+        _ingots.Clear();
 
-        var done = _order.Remaining - Math.Max(0, remaining);
-        var left = Math.Max(0, remaining);
+        context.Notes?.Add($"Ore burnt away by failed smelts: {_burnt:N0}");
+
+        var left = Math.Max(0, _remaining);
+        var done = _startRemaining - left;
 
         if (!context.Preview)
         {
@@ -290,7 +336,7 @@ public class SmeltIdleRun : IdleDiscreteTaskRun
 
         context.Report.OrderStatus = left == 0
             ? $"smelted {_order.Requested:N0} ore, order complete"
-            : $"{done:N0} ore smelted this time, {left:N0} of {_order.Requested:N0} left{(stop == "time" ? " (continues next time)" : "")}";
+            : $"{done:N0} ore smelted this time, {left:N0} of {_order.Requested:N0} left{(_outOfTime ? " (continues next time)" : "")}";
     }
 
     private static Type GetIngotType(BaseOre ore)

@@ -38,6 +38,9 @@ public sealed class IdleDiscreteContext
     public IdleTaskDefinition Definition { get; }
     public IdleSettleMode Mode { get; }
     public bool Preview => Mode == IdleSettleMode.Preview;
+
+    /// <summary>Live work: the player sees each result as it happens.</summary>
+    public bool Online => Mode == IdleSettleMode.Online;
     public IdleReport Report { get; }
 
     /// <summary>Breakdown lines for staff simulations; null on real logins.</summary>
@@ -151,6 +154,37 @@ public sealed class IdleDiscreteContext
         }
 
         return placed != 0;
+    }
+
+    /// <summary>Tells the working player about a notable event (exceptional item, broken tool). Live work only.</summary>
+    public void Notify(string message)
+    {
+        if (Online && Player.NetState != null)
+        {
+            Player.SendMessage(0x59, message);
+        }
+    }
+
+    /// <summary>Adds a delivered stack to the summary, merging it into an earlier line of the same item.</summary>
+    public void MergeLine(IdleItemLine line)
+    {
+        if (line == null)
+        {
+            return;
+        }
+
+        foreach (var existing in Report.Items)
+        {
+            if (existing.Type == line.Type)
+            {
+                existing.Amount += line.Amount;
+                existing.ToPack += line.ToPack;
+                existing.ToBank += line.ToBank;
+                return;
+            }
+        }
+
+        Report.Items.Add(line);
     }
 
     /// <summary>The summary line for an item type, created on first use.</summary>
