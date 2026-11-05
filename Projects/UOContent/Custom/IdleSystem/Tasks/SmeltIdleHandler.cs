@@ -42,6 +42,8 @@ public class SmeltIdleHandler : IdleTaskHandler
         return forge;
     }
 
+    public override bool UsesStation(IdleTaskDefinition def) => true;
+
     public override string ExplainStation(IdleTaskDefinition def, Map map, Point3D location) =>
         SmithyStations.Explain(map, location);
 

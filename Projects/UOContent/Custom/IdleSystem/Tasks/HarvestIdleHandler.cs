@@ -102,9 +102,21 @@ public class HarvestIdleHandler : IdleTaskHandler
             return false;
         }
 
-        if (definition.Validate(map.Tiles.GetLandTile(x, y).ID & TileData.MaxLandValue, true))
+        if (MatchesTile(definition, map, x, y))
         {
             error = null;
+            return true;
+        }
+
+        error = "There is nothing to harvest at that spot for this task.";
+        return false;
+    }
+
+    /// <summary>The tile part of <see cref="ValidateTarget"/>: the land tile or a static at x, y is harvestable.</summary>
+    public static bool MatchesTile(HarvestDefinition definition, Map map, int x, int y)
+    {
+        if (definition.Validate(map.Tiles.GetLandTile(x, y).ID & TileData.MaxLandValue, true))
+        {
             return true;
         }
 
@@ -112,14 +124,16 @@ public class HarvestIdleHandler : IdleTaskHandler
         {
             if (definition.Validate(tile.ID, false))
             {
-                error = null;
                 return true;
             }
         }
 
-        error = "There is nothing to harvest at that spot for this task.";
         return false;
     }
+
+    public HarvestDefinition GetDefinition(IdleTaskDefinition def) => Get(def).Definition;
+
+    public bool IsFishing(IdleTaskDefinition def) => Get(def).System is Fishing;
 
     public override bool HasSupplies(PlayerMobile pm, IdleTaskDefinition def, out string error)
     {

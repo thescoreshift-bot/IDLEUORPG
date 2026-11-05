@@ -65,6 +65,9 @@ public abstract class IdleTaskHandler
         return true;
     }
 
+    /// <summary>Whether <see cref="CheckStation"/> needs a work station (forge, anvil) for this task.</summary>
+    public virtual bool UsesStation(IdleTaskDefinition def) => false;
+
     /// <summary>For logs: what the station check saw around a spot with nobody on it.</summary>
     public virtual string ExplainStation(IdleTaskDefinition def, Map map, Point3D location) => null;
 }

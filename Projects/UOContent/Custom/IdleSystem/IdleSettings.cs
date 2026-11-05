@@ -49,6 +49,51 @@ public class IdleSettings
     public int KeepFreeStones { get; set; } = 20;
 
     public IdleSkillGainSettings SkillGain { get; set; } = new();
+
+    public IdleSpotGeneratorSettings SpotGenerator { get; set; } = new();
+}
+
+/// <summary>[IdleGenSpots: how the world scan picks spots.</summary>
+public class IdleSpotGeneratorSettings
+{
+    /// <summary>Minimum tiles between two generated spots of the same harvest task.</summary>
+    public int MinSpacing { get; set; } = 24;
+
+    /// <summary>Minimum tiles between two generated smithy spots.</summary>
+    public int SmithySpacing { get; set; } = 6;
+
+    /// <summary>Walks the map from starting cities, moongates, and teleporters to tag spots nobody can walk to.</summary>
+    public bool Reachability { get; set; } = true;
+
+    public bool ExcludeDungeons { get; set; } = true;
+
+    /// <summary>Region names whose spots are dropped (any map).</summary>
+    public List<string> ExcludeRegions { get; set; } = ["Jail", "Green Acres"];
+
+    /// <summary>Areas whose spots are dropped.</summary>
+    public List<IdleExcludeArea> ExcludeAreas { get; set; } =
+    [
+        new() { Name = "Dungeons and staff areas east of x 5120", Map = "Felucca", X = 5120, Y = 0, Width = 2048, Height = 4096 }
+    ];
+
+    /// <summary>Spawners of hostile creatures within this many tiles count toward a spot's danger.</summary>
+    public int HostileSpawnerRange { get; set; } = 24;
+
+    /// <summary>Game-loop time the scan may use per tick; it pauses between ticks.</summary>
+    public double BudgetMilliseconds { get; set; } = 25;
+}
+
+public class IdleExcludeArea
+{
+    public string Name { get; set; }
+    public string Map { get; set; }
+    public int X { get; set; }
+    public int Y { get; set; }
+    public int Width { get; set; }
+    public int Height { get; set; }
+
+    public bool Contains(Map map, int x, int y) =>
+        map?.Name.InsensitiveEquals(Map) == true && x >= X && y >= Y && x < X + Width && y < Y + Height;
 }
 
 public class IdleSkillGainSettings
