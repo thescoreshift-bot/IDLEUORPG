@@ -387,8 +387,16 @@ public static class IdleCommands
             return;
         }
 
+        var generated = 0;
+
         foreach (var loc in IdleSystem.Locations.Values)
         {
+            if (loc is IdleSpot { Generated: true })
+            {
+                generated++;
+                continue;
+            }
+
             using var tasks = ValueStringBuilder.Create();
             foreach (var taskId in loc.AllTaskIds())
             {
@@ -401,6 +409,11 @@ public static class IdleCommands
             }
 
             pm.SendMessage($"{loc.Id}: {loc.Name} ({tasks.AsSpan()}) at {loc.Location} on {loc.Map}");
+        }
+
+        if (generated > 0)
+        {
+            pm.SendMessage($"Plus {generated:N0} generated spots across the world.");
         }
     }
 

@@ -64,6 +64,9 @@ public abstract class IdleTaskHandler
         error = null;
         return true;
     }
+
+    /// <summary>For logs: what the station check saw around a spot with nobody on it.</summary>
+    public virtual string ExplainStation(IdleTaskDefinition def, Map map, Point3D location) => null;
 }
 
 /// <summary>One settlement of a task. Lives only for the duration of a login.</summary>

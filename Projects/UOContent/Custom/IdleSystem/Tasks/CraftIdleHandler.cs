@@ -54,6 +54,9 @@ public class CraftIdleHandler : IdleTaskHandler
         return false;
     }
 
+    public override string ExplainStation(IdleTaskDefinition def, Map map, Point3D location) =>
+        GetSystem(def) is DefBlacksmithy ? SmithyStations.Explain(map, location) : null;
+
     public override bool ValidateOrder(PlayerMobile pm, IdleTaskDefinition def, IdleOrder order, out string error)
     {
         var system = GetSystem(def);

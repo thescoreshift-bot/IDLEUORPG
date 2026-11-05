@@ -42,6 +42,9 @@ public class SmeltIdleHandler : IdleTaskHandler
         return forge;
     }
 
+    public override string ExplainStation(IdleTaskDefinition def, Map map, Point3D location) =>
+        SmithyStations.Explain(map, location);
+
     public override bool HasSupplies(PlayerMobile pm, IdleTaskDefinition def, out string error)
     {
         error = "Say how much ore to smelt.";

@@ -149,16 +149,32 @@ public class IdleSystem : GenericPersistence
             foreach (var taskId in loc.AllTaskIds())
             {
                 var def = GetTask(taskId);
-                if (def != null && !IdleTaskHandler.Get(def.Kind).CheckStation(null, def, loc.Map, loc.Location, out var error))
+                var handler = def == null ? null : IdleTaskHandler.Get(def.Kind);
+                if (handler != null && !handler.CheckStation(null, def, loc.Map, loc.Location, out var error))
                 {
-                    logger.Warning("Idle location {Id} ({Task}): {Error}", loc.Id, taskId, error);
+                    logger.Warning(
+                        "Idle location {Id} ({Task}): {Error} [{Detail}]",
+                        loc.Id, taskId, error, handler.ExplainStation(def, loc.Map, loc.Location)
+                    );
                 }
             }
 
             _locations[loc.Id] = loc;
         }
 
-        logger.Information("Idle system: {Tasks} task(s), {Locations} location(s)", _tasks.Count, _locations.Count);
+        var handWritten = _locations.Count;
+        var generated = IdleSpotLoader.Load(_locations, id => _tasks.ContainsKey(id));
+
+        IdleSpotIndex.Clear();
+        foreach (var loc in _locations.Values)
+        {
+            IdleSpotIndex.Add(loc);
+        }
+
+        logger.Information(
+            "Idle system: {Tasks} task(s), {Locations} location(s), {Generated} generated spot(s)",
+            _tasks.Count, handWritten, generated
+        );
     }
 
     public static IdleState GetState(PlayerMobile pm) => pm != null && _states.TryGetValue(pm, out var state) ? state : null;

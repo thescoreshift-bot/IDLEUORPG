@@ -1,6 +1,7 @@
 using Server.Engines.Craft;
 using Server.Items;
 using Server.Mobiles;
+using Server.Text;
 
 namespace Server.Custom.Idle;
 
@@ -19,6 +20,17 @@ public static class SmithyStations
 
     public static bool IsForge(int id) => id is 4017 or >= 6522 and <= 6569 or 11736;
 
+    /// <summary>What the offline check saw, per station kind: candidates in range and why each was rejected.</summary>
+    public struct Survey
+    {
+        public bool Anvil;
+        public bool Forge;
+        public int AnvilsSeen;
+        public int ForgesSeen;
+        public int RejectedHeight;
+        public int RejectedSight;
+    }
+
     public static void Find(PlayerMobile pm, Map map, Point3D location, out bool anvil, out bool forge)
     {
         if (pm != null && pm.Map == map && pm.Location == location)
@@ -27,12 +39,41 @@ public static class SmithyStations
             return;
         }
 
-        anvil = false;
-        forge = false;
+        var survey = Scan(map, location, true);
+        anvil = survey.Anvil;
+        forge = survey.Forge;
+    }
+
+    /// <summary>For logs: the offline check's view of a spot, e.g. "anvils 1, forges 1, 1 out of height reach".</summary>
+    public static string Explain(Map map, Point3D location)
+    {
+        var s = Scan(map, location, false);
+
+        using var sb = ValueStringBuilder.Create();
+        sb.Append($"at {location}: anvils in range {s.AnvilsSeen}, forges in range {s.ForgesSeen}");
+
+        if (s.RejectedHeight > 0)
+        {
+            sb.Append($", {s.RejectedHeight} more than 16 above or below");
+        }
+
+        if (s.RejectedSight > 0)
+        {
+            sb.Append($", {s.RejectedSight} out of line of sight");
+        }
+
+        sb.Append($"; usable: anvil {s.Anvil}, forge {s.Forge}");
+        return sb.ToString();
+    }
+
+    /// <param name="stopWhenFound">Stops at the first anvil and forge found; false surveys everything for logs.</param>
+    public static Survey Scan(Map map, Point3D location, bool stopWhenFound)
+    {
+        var s = new Survey();
 
         if (map == null || map == Map.Internal)
         {
-            return;
+            return s;
         }
 
         // Mobile eye height, as Map.LineOfSight uses for a character.
@@ -44,31 +85,53 @@ public static class SmithyStations
             var isAnvil = type.IsDefined(typeof(AnvilAttribute), false) || IsAnvil(item.ItemID);
             var isForge = type.IsDefined(typeof(ForgeAttribute), false) || IsForge(item.ItemID);
 
-            if ((isAnvil || isForge) && item.Z <= location.Z + 16 && location.Z <= item.Z + 16 &&
-                map.LineOfSight(eye, map.GetPoint(item, false)))
+            if (isAnvil || isForge)
             {
-                anvil |= isAnvil;
-                forge |= isForge;
+                Consider(ref s, map, eye, location.Z, isAnvil, isForge, item.Z, map.GetPoint(item, false));
             }
         }
 
-        for (var x = -Range; x <= Range && (!anvil || !forge); x++)
+        for (var x = -Range; x <= Range && (!stopWhenFound || !s.Anvil || !s.Forge); x++)
         {
-            for (var y = -Range; y <= Range && (!anvil || !forge); y++)
+            for (var y = -Range; y <= Range && (!stopWhenFound || !s.Anvil || !s.Forge); y++)
             {
                 foreach (var tile in map.Tiles.GetStaticAndMultiTiles(location.X + x, location.Y + y))
                 {
                     var isAnvil = IsAnvil(tile.ID);
                     var isForge = IsForge(tile.ID);
 
-                    if ((isAnvil || isForge) && tile.Z <= location.Z + 16 && location.Z <= tile.Z + 16 &&
-                        map.LineOfSight(eye, new Point3D(location.X + x, location.Y + y, tile.Z + tile.Height / 2 + 1)))
+                    if (isAnvil || isForge)
                     {
-                        anvil |= isAnvil;
-                        forge |= isForge;
+                        var center = new Point3D(location.X + x, location.Y + y, tile.Z + tile.Height / 2 + 1);
+                        Consider(ref s, map, eye, location.Z, isAnvil, isForge, tile.Z, center);
                     }
                 }
             }
         }
+
+        return s;
+    }
+
+    private static void Consider(
+        ref Survey s, Map map, Point3D eye, int standZ, bool isAnvil, bool isForge, int z, Point3D center
+    )
+    {
+        s.AnvilsSeen += isAnvil ? 1 : 0;
+        s.ForgesSeen += isForge ? 1 : 0;
+
+        if (z > standZ + 16 || standZ > z + 16)
+        {
+            s.RejectedHeight++;
+            return;
+        }
+
+        if (!map.LineOfSight(eye, center))
+        {
+            s.RejectedSight++;
+            return;
+        }
+
+        s.Anvil |= isAnvil;
+        s.Forge |= isForge;
     }
 }
