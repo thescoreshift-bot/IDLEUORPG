@@ -1,0 +1,6 @@
+{
+  // Idle (offline progress) tasks. Each task names the code "Kind" that runs it plus its data.
+  // Locations are named spots a task can target without an in-game click.
+  "Tasks": [],
+  "Locations": []
+}
