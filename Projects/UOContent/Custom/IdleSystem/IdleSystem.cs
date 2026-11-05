@@ -23,7 +23,13 @@ public class IdleSystem : GenericPersistence
     private static readonly Dictionary<string, IdleTaskDefinition> _tasks = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, IdleLocation> _locations = new(StringComparer.OrdinalIgnoreCase);
 
+    // Results settled at connect time, shown once the client has finished logging in. Not persisted: the
+    // items and gains themselves are already applied, only the summary would be lost to a restart.
+    private static readonly Dictionary<PlayerMobile, PendingSummary> _pending = new();
+
     private static IdleSystem _persistence;
+
+    private readonly record struct PendingSummary(IdleReport Report, string Message);
 
     public static IdleSettings Settings { get; private set; } = new();
 
@@ -44,6 +50,7 @@ public class IdleSystem : GenericPersistence
     {
         LoadCatalog();
         EventSink.Logout += OnLogout;
+        EventSink.Connected += OnConnected;
     }
 
     private static void LoadSettings()
@@ -255,10 +262,15 @@ public class IdleSystem : GenericPersistence
         state.LogoutResult = Evaluate(pm, state, m.Map, m.Location);
     }
 
-    [OnEvent(nameof(PlayerMobile.PlayerLoginEvent))]
-    public static void OnLogin(PlayerMobile pm)
+    /// <summary>
+    /// Settles as soon as a character is selected. At this point the login code has packets blocked and the client
+    /// has not yet been sent the character's skills or stats, so the gains arrive as the starting values instead of
+    /// one "your skill has increased" message per gain. The summary waits for <see cref="OnLogin"/>.
+    /// </summary>
+    private static void OnConnected(Mobile m)
     {
-        if (!_states.TryGetValue(pm, out var state) || state.LogoutResult == IdleLogoutResult.None)
+        if (m is not PlayerMobile pm || !_states.TryGetValue(pm, out var state) ||
+            state.LogoutResult == IdleLogoutResult.None)
         {
             return;
         }
@@ -274,14 +286,33 @@ public class IdleSystem : GenericPersistence
 
         if (result != IdleLogoutResult.Eligible)
         {
-            pm.SendMessage(0x22, GetResultMessage(result));
+            _pending[pm] = new PendingSummary(null, GetResultMessage(result));
             return;
         }
 
         var report = Settle(pm, state, away, IdleSettleMode.Login);
         if (report != null)
         {
-            ShowReport(pm, report);
+            _pending[pm] = new PendingSummary(report, null);
+        }
+    }
+
+    [OnEvent(nameof(PlayerMobile.PlayerLoginEvent))]
+    public static void OnLogin(PlayerMobile pm)
+    {
+        if (!_pending.Remove(pm, out var pending))
+        {
+            return;
+        }
+
+        if (pending.Message != null)
+        {
+            pm.SendMessage(0x22, pending.Message);
+        }
+
+        if (pending.Report != null)
+        {
+            ShowReport(pm, pending.Report);
         }
     }
 
@@ -335,7 +366,11 @@ public class IdleSystem : GenericPersistence
         };
 
     [OnEvent(nameof(PlayerMobile.PlayerDeletedEvent))]
-    public static void OnPlayerDeleted(PlayerMobile pm) => _states.Remove(pm);
+    public static void OnPlayerDeleted(PlayerMobile pm)
+    {
+        _states.Remove(pm);
+        _pending.Remove(pm);
+    }
 
     public override void Serialize(IGenericWriter writer)
     {

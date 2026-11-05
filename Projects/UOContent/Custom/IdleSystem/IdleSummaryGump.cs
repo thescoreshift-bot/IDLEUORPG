@@ -84,25 +84,25 @@ public class IdleSummaryGump : DynamicGump
             sb.Append($"<BR><B>Time counted:</B> {FormatTime(r.Counted)} (maximum reached)");
         }
 
-        sb.Append($"<BR><B>Attempts:</B> {r.Attempts:N0} &nbsp; <B>Successes:</B> {r.Successes:N0}<BR><BR>");
+        sb.Append($"<BR><B>Attempts:</B> {r.Attempts:N0}, <B>Successes:</B> {r.Successes:N0}<BR><BR>");
 
         sb.Append("<B>Items gained</B><BR>");
         if (r.Items.Count == 0)
         {
-            sb.Append("&nbsp; Nothing<BR>");
+            sb.Append("- Nothing<BR>");
         }
 
         foreach (var item in r.Items)
         {
-            sb.Append($"&nbsp; {item.Amount:N0} {item.Name}");
+            sb.Append($"- {item.Amount:N0} {item.Name}");
             if (item.ToBank > 0)
             {
-                sb.Append($" &mdash; {item.ToBank:N0} sent to bank");
+                sb.Append($" - {item.ToBank:N0} sent to bank");
             }
 
             if (item.Lost > 0)
             {
-                sb.Append($" &mdash; <BASEFONT COLOR=#FF6060>{item.Lost:N0} lost (no room)</BASEFONT><BASEFONT COLOR=#FFFFFF>");
+                sb.Append($" - <BASEFONT COLOR=#FF6060>{item.Lost:N0} lost (no room)</BASEFONT><BASEFONT COLOR=#FFFFFF>");
             }
 
             sb.Append("<BR>");
@@ -111,17 +111,17 @@ public class IdleSummaryGump : DynamicGump
         sb.Append("<BR><B>Skill gains</B><BR>");
         if (r.Skills.Count == 0)
         {
-            sb.Append("&nbsp; None<BR>");
+            sb.Append("- None<BR>");
         }
 
         foreach (var skill in r.Skills)
         {
-            sb.Append($"&nbsp; {skill.Name}: {skill.From:F1} &rarr; {skill.To:F1} (+{skill.To - skill.From:F1})<BR>");
+            sb.Append($"- {skill.Name}: {skill.From:F1} -> {skill.To:F1} (+{skill.To - skill.From:F1})<BR>");
         }
 
         foreach (var stat in r.Stats)
         {
-            sb.Append($"&nbsp; {stat.Name}: {stat.From} &rarr; {stat.To}<BR>");
+            sb.Append($"- {stat.Name}: {stat.From} -> {stat.To}<BR>");
         }
 
         if (r.StopReason != null)

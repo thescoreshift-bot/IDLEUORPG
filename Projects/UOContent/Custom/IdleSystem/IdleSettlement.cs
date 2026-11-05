@@ -393,7 +393,7 @@ public static class IdleSettlement
         return (int)whole + (Utility.RandomDouble() < value - whole ? 1 : 0);
     }
 
-    /// <summary>Backpack first (respecting its weight and item limits), then bank box; the rest is lost.</summary>
+    /// <summary>Backpack first (its limits and the character's carry limit), then bank box; the rest is lost.</summary>
     private static IdleItemLine Deliver(PlayerMobile pm, Type type, int amount, bool place)
     {
         if (amount <= 0)
@@ -464,6 +464,11 @@ public static class IdleSettlement
 
                 item.Amount = fit;
             }
+            else if (!Fits(container, pm, item))
+            {
+                item.Delete();
+                break;
+            }
 
             var count = item.Amount;
             if (!container.TryDropItem(pm, item, false))
@@ -481,7 +486,7 @@ public static class IdleSettlement
     private static int LargestFit(Container container, PlayerMobile pm, Item item, int max)
     {
         item.Amount = max;
-        if (container.CheckHold(pm, item, false, true))
+        if (Fits(container, pm, item))
         {
             return max;
         }
@@ -492,7 +497,7 @@ public static class IdleSettlement
             var mid = (lo + hi + 1) / 2;
             item.Amount = mid;
 
-            if (container.CheckHold(pm, item, false, true))
+            if (Fits(container, pm, item))
             {
                 lo = mid;
             }
@@ -503,6 +508,20 @@ public static class IdleSettlement
         }
 
         return lo;
+    }
+
+    /// <summary>
+    /// The container's own limits, plus, for anything the character carries, the character's weight limit, so offline
+    /// gains never leave them overloaded. Staff skip container limits (as online) but not the carry limit.
+    /// </summary>
+    private static bool Fits(Container container, PlayerMobile pm, Item item)
+    {
+        if (!container.CheckHold(pm, item, false, true))
+        {
+            return false;
+        }
+
+        return container is BankBox || pm.TotalWeight + item.PileWeight + item.TotalWeight <= pm.MaxWeight;
     }
 
     private static Item Construct(Type type)
