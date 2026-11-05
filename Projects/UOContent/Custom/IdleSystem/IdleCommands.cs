@@ -252,6 +252,19 @@ public static class IdleCommands
                 }
             }
 
+            foreach (var move in report.MovedToBank)
+            {
+                from.SendMessage(0x22, $"Overloaded: moved {move.Amount:N0} {move.Name} ({move.Weight} stones) from pack to bank");
+            }
+
+            if (!_preview)
+            {
+                from.SendMessage(
+                    0x59,
+                    $"Weight: {report.WeightBefore} -> {report.WeightAfter} / {report.WeightLimit} stones (as the status bar shows it)"
+                );
+            }
+
             foreach (var skill in report.Skills)
             {
                 from.SendMessage(0x59, $"Skill: {skill.Name} {skill.From:F1} -> {skill.To:F1} (+{skill.To - skill.From:F1})");

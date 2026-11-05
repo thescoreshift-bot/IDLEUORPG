@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Server.Items;
+using Server.Logging;
 using Server.Misc;
 using Server.Mobiles;
 
@@ -17,6 +18,8 @@ public static class IdleSettlement
     private const double Epsilon = 1e-6;
     private const int MaxStack = 60000;
     private const int MaxNonStackable = 100;
+
+    private static readonly ILogger logger = LogFactory.GetLogger(typeof(IdleSettlement));
 
     private static TimeSpan _statGainDelay;
     private static double _statGainChanceMultiplier;
@@ -195,6 +198,22 @@ public static class IdleSettlement
             ApplyStatGains(pm, skill.Info, counted, statRolls, notes);
         }
 
+        report.WeightLimit = pm.MaxWeight;
+        report.WeightBefore = CarriedWeight(pm);
+
+        if (mode != IdleSettleMode.Preview)
+        {
+            logger.Information(
+                "Idle weight {Player}: before delivery {Weight}/{Max} (body {Body} + items {Items}, Str {Str})",
+                pm,
+                report.WeightBefore,
+                report.WeightLimit,
+                Mobile.BodyWeight,
+                pm.TotalWeight,
+                pm.Str
+            );
+        }
+
         foreach (var (type, expected) in yields)
         {
             var amount = RoundRandom(expected);
@@ -206,6 +225,25 @@ public static class IdleSettlement
                 line.Discarded = discard;
                 notes?.Add($"Yield: {line.Name} expected {expected:N2} -> {amount:N0}{(discard ? " (discarded)" : "")}");
             }
+        }
+
+        if (mode != IdleSettleMode.Preview)
+        {
+            EnforceWeightLimit(pm, report);
+        }
+
+        report.WeightAfter = CarriedWeight(pm);
+
+        if (notes != null)
+        {
+            notes.Add(
+                $"Weight rule: body {Mobile.BodyWeight} + everything carried (equipped items, the backpack and its contents) must stay at or below max {report.WeightLimit} (40 + 3.5 x Str {pm.Str})"
+            );
+            notes.Add(
+                mode == IdleSettleMode.Preview
+                    ? $"Weight: {report.WeightBefore} / {report.WeightLimit} now; room for {Math.Max(0, report.WeightLimit - report.WeightBefore)} stones (preview places nothing)"
+                    : $"Weight: {report.WeightBefore} -> {report.WeightAfter} / {report.WeightLimit}"
+            );
         }
 
         if (skill.Base != startBase)
@@ -411,6 +449,8 @@ public static class IdleSettlement
 
         var line = new IdleItemLine
         {
+            Type = type,
+            UnitWeight = sample.Weight,
             ItemId = sample.ItemID,
             Hue = sample.Hue,
             Name = sample.Name ?? Localization.GetText(sample.LabelNumber) ?? type.Name,
@@ -435,7 +475,102 @@ public static class IdleSettlement
             line.ToBank = Place(pm.BankBox, pm, type, stackable, remaining);
         }
 
+        logger.Information(
+            "Idle deliver {Player}: {Amount} {Item} at {Unit} stone(s) each -> pack {Pack}, bank {Bank}, lost {Lost}; weight now {Weight}/{Max}",
+            pm,
+            amount,
+            line.Name,
+            line.UnitWeight,
+            line.ToPack,
+            line.ToBank,
+            line.Lost,
+            CarriedWeight(pm),
+            pm.MaxWeight
+        );
+
         return line;
+    }
+
+    /// <summary>
+    /// The weight the status bar shows and the server checks for overloading (PlayerMobile.OnSubItemAdded,
+    /// StaminaSystem): a fixed body weight plus every item the character has, equipped or in the backpack.
+    /// </summary>
+    public static int CarriedWeight(Mobile m) => Mobile.BodyWeight + m.TotalWeight;
+
+    /// <summary>
+    /// Safety net after delivery: while the character is overloaded, moves whole stacks of what this settlement
+    /// produced from the top of the backpack to the bank, newest first. The player's other belongings are never moved.
+    /// </summary>
+    public static void EnforceWeightLimit(PlayerMobile pm, IdleReport report)
+    {
+        var pack = pm.Backpack;
+        var bank = pm.BankBox;
+
+        if (pack == null || bank == null || pm.AccessLevel >= AccessLevel.GameMaster || CarriedWeight(pm) <= pm.MaxWeight)
+        {
+            return;
+        }
+
+        var types = new HashSet<Type>();
+        foreach (var line in report.Items)
+        {
+            if (line.Type != null && line.ToPack > 0)
+            {
+                types.Add(line.Type);
+            }
+        }
+
+        var items = pack.Items;
+        for (var i = items.Count - 1; i >= 0 && CarriedWeight(pm) > pm.MaxWeight; i--)
+        {
+            var item = items[i];
+            if (!types.Contains(item.GetType()) || !bank.CheckHold(pm, item, false, true))
+            {
+                continue;
+            }
+
+            var amount = item.Amount;
+            var weight = item.PileWeight + item.TotalWeight;
+            var name = item.Name ?? Localization.GetText(item.LabelNumber) ?? item.GetType().Name;
+
+            if (!bank.TryDropItem(pm, item, false))
+            {
+                continue;
+            }
+
+            report.MovedToBank.Add(new IdleMoveLine(name, amount, weight));
+
+            foreach (var line in report.Items)
+            {
+                if (line.Type == item.GetType())
+                {
+                    var shifted = Math.Min(amount, line.ToPack);
+                    line.ToPack -= shifted;
+                    line.ToBank += shifted;
+                    break;
+                }
+            }
+
+            logger.Information(
+                "Idle weight {Player}: overloaded, moved {Amount} {Item} ({Stones} stones) to the bank; weight now {Weight}/{Max}",
+                pm,
+                amount,
+                name,
+                weight,
+                CarriedWeight(pm),
+                pm.MaxWeight
+            );
+        }
+
+        if (CarriedWeight(pm) > pm.MaxWeight)
+        {
+            logger.Warning(
+                "Idle weight {Player}: still overloaded at {Weight}/{Max} after the safety pass",
+                pm,
+                CarriedWeight(pm),
+                pm.MaxWeight
+            );
+        }
     }
 
     private static int Place(Container container, PlayerMobile pm, Type type, bool stackable, int amount)
@@ -480,6 +615,18 @@ public static class IdleSettlement
             }
 
             placed += stackable ? count : 1;
+
+            if (stackable && container is not BankBox)
+            {
+                logger.Information(
+                    "Idle deliver {Player}: pack step +{Count}, {Placed} placed so far; weight now {Weight}/{Max}",
+                    pm,
+                    count,
+                    placed,
+                    CarriedWeight(pm),
+                    pm.MaxWeight
+                );
+            }
         }
 
         return placed;
@@ -523,7 +670,7 @@ public static class IdleSettlement
             return false;
         }
 
-        return container is BankBox || pm.TotalWeight + item.PileWeight + item.TotalWeight <= pm.MaxWeight;
+        return container is BankBox || CarriedWeight(pm) + item.PileWeight + item.TotalWeight <= pm.MaxWeight;
     }
 
     private static Item Construct(Type type)

@@ -23,6 +23,14 @@ public class IdleReport
     public List<IdleSkillLine> Skills { get; } = new();
     public List<IdleStatLine> Stats { get; } = new();
 
+    /// <summary>Carried weight as the status bar shows it (body weight included), before and after delivery.</summary>
+    public int WeightBefore { get; set; }
+    public int WeightAfter { get; set; }
+    public int WeightLimit { get; set; }
+
+    /// <summary>Stacks the weight safety pass moved from the backpack to the bank.</summary>
+    public List<IdleMoveLine> MovedToBank { get; } = new();
+
     /// <summary>Which rules applied and the exact numbers, for staff simulations. Empty on real logins.</summary>
     public List<string> Notes { get; } = new();
 }
@@ -41,6 +49,8 @@ public enum IdleSettleMode
 
 public class IdleItemLine
 {
+    public Type Type { get; init; }
+    public double UnitWeight { get; init; }
     public int ItemId { get; init; }
     public int Hue { get; init; }
     public string Name { get; init; }
@@ -57,3 +67,5 @@ public class IdleItemLine
 public record IdleSkillLine(string Name, double From, double To);
 
 public record IdleStatLine(string Name, int From, int To);
+
+public record IdleMoveLine(string Name, int Amount, int Weight);

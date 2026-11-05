@@ -62,6 +62,11 @@ public class IdleSummaryGump : DynamicGump
             pm.SendMessage(0x59, $"  {stat.Name}: {stat.From} -> {stat.To}");
         }
 
+        foreach (var move in report.MovedToBank)
+        {
+            pm.SendMessage(0x22, $"  You were overloaded: {move.Amount:N0} {move.Name} ({move.Weight} stones) moved to your bank.");
+        }
+
         if (report.StopReason != null)
         {
             pm.SendMessage(0x22, $"  Stopped early: {report.StopReason}");
@@ -118,6 +123,13 @@ public class IdleSummaryGump : DynamicGump
             }
 
             sb.Append("<BR>");
+        }
+
+        foreach (var move in r.MovedToBank)
+        {
+            sb.Append(
+                $"<BASEFONT COLOR=#FF6060>- Overloaded: {move.Amount:N0} {move.Name} ({move.Weight} stones) moved to your bank</BASEFONT><BASEFONT COLOR=#FFFFFF><BR>"
+            );
         }
 
         sb.Append("<BR><B>Skill gains</B><BR>");

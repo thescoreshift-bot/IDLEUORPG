@@ -325,6 +325,17 @@ public class IdleSystem : GenericPersistence
 
         if (pending.Report != null)
         {
+            // Second check once the login has fully finished, in case anything changed the carried weight since settling.
+            logger.Information(
+                "Idle weight {Player}: at login {Weight}/{Max} (settled at {Settled})",
+                pm,
+                IdleSettlement.CarriedWeight(pm),
+                pm.MaxWeight,
+                pending.Report.WeightAfter
+            );
+            IdleSettlement.EnforceWeightLimit(pm, pending.Report);
+            pending.Report.WeightAfter = IdleSettlement.CarriedWeight(pm);
+
             ShowReport(pm, pending.Report);
         }
     }
