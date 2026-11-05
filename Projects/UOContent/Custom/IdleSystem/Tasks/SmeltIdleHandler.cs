@@ -206,7 +206,7 @@ public class SmeltIdleRun : IdleDiscreteTaskRun
 
         while (true)
         {
-            if (_pile == null && !NextPile())
+            if (_pile == null && !NextPile(context.Online))
             {
                 return false;
             }
@@ -253,11 +253,19 @@ public class SmeltIdleRun : IdleDiscreteTaskRun
         }
     }
 
-    private bool NextPile()
+    private bool NextPile(bool rescan)
     {
         if (_remaining <= 0)
         {
             return false;
+        }
+
+        // Live, the player may add or move ore between attempts.
+        if (rescan)
+        {
+            _piles = SmeltIdleHandler.FindOre(_pm);
+            _pileIndex = 0;
+            _outOfOre = false;
         }
 
         while (_pileIndex < _piles.Count)
@@ -302,6 +310,14 @@ public class SmeltIdleRun : IdleDiscreteTaskRun
         }
 
         _pile = null;
+    }
+
+    /// <summary>One live smelt. Online smelting plays no animation or sound, so neither does this.</summary>
+    public override double LiveStep(IdleDiscreteContext context)
+    {
+        var worked = Step(context);
+        Complete(context);
+        return worked ? _def.SecondsPerAttempt : -1;
     }
 
     public override void Complete(IdleDiscreteContext context)

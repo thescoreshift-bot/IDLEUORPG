@@ -489,6 +489,19 @@ public class CraftIdleRun : IdleDiscreteTaskRun
         return true;
     }
 
+    /// <summary>One live craft attempt with the craft system's own effect (the anvil sound for blacksmithing).</summary>
+    public override double LiveStep(IdleDiscreteContext context)
+    {
+        var worked = Step(context);
+        if (worked)
+        {
+            _system.PlayCraftEffect(_pm);
+        }
+
+        Complete(context);
+        return worked ? _def.SecondsPerAttempt : -1;
+    }
+
     private void ReadSupplies()
     {
         _available = new int[_costs.Count];

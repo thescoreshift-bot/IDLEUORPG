@@ -14,6 +14,18 @@ public class IdleSettings
     /// <summary>Offline work speed as a fraction of online speed (0.6 = 60%).</summary>
     public double OfflineRate { get; set; } = 0.6;
 
+    /// <summary>Speed of live work while the character is in the world (1.0 = the normal online pace).</summary>
+    public double OnlineRate { get; set; } = 1.0;
+
+    /// <summary>
+    /// After this many hours of live work without logging out, live work quietly continues at the offline rate.
+    /// 0 = never.
+    /// </summary>
+    public double OnlineFullRateHours { get; set; } = 4;
+
+    /// <summary>On login, the task picks up again as live work if the character is still at the spot.</summary>
+    public bool ResumeOnLogin { get; set; } = true;
+
     /// <summary>Time away beyond this is not counted.</summary>
     public TimeSpan MaxOfflineTime { get; set; } = TimeSpan.FromHours(8);
 

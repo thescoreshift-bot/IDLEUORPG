@@ -14,7 +14,7 @@ public static class IdleCommands
         CommandSystem.Register("IdleSim", AccessLevel.GameMaster, IdleSim_OnCommand);
     }
 
-    [Usage("Idle [stop | status | list | recipes [filter] | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]")]
+    [Usage("Idle [stop | status | resume | list | recipes [filter] | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]")]
     [Description(
         "Choose the spot your character works while you are logged out. With no argument, target the spot. " +
         "smelt/craft start an order where you stand; 'at <location>' can be followed by the same order."
@@ -65,6 +65,23 @@ public static class IdleCommands
                     StartHere(pm, e);
                     break;
                 }
+            case "resume":
+                {
+                    if (IdleOnlineWork.IsWorking(pm))
+                    {
+                        pm.SendMessage("You are already working.");
+                    }
+                    else if (IdleOnlineWork.TryStart(pm, out var error))
+                    {
+                        SendStarted(pm);
+                    }
+                    else
+                    {
+                        pm.SendMessage(0x22, error ?? "You cannot work right now.");
+                    }
+
+                    break;
+                }
             case "recipes":
                 {
                     SendRecipes(pm, e.Length > 1 ? e.GetString(1) : null);
@@ -73,7 +90,7 @@ public static class IdleCommands
             default:
                 {
                     pm.SendMessage(
-                        "Usage: [Idle [stop | status | list | recipes [filter] | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]"
+                        "Usage: [Idle [stop | status | resume | list | recipes [filter] | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]"
                     );
                     break;
                 }
@@ -234,7 +251,15 @@ public static class IdleCommands
             pm.SendMessage(0x59, $"Order: {DescribeOrder(state.Order)}.");
         }
 
-        pm.SendMessage(0x59, $"Log out within {range} tiles of this spot and your character will keep working while you are away.");
+        if (IdleOnlineWork.IsWorking(pm))
+        {
+            pm.SendMessage(0x59, $"You start working. Moving more than {range} tiles away, fighting, or working by hand stops it.");
+            pm.SendMessage(0x59, "Log out here and your character keeps working while you are away.");
+        }
+        else
+        {
+            pm.SendMessage(0x59, $"Log out within {range} tiles of this spot and your character will keep working while you are away.");
+        }
     }
 
     private static void SendStatus(PlayerMobile pm)
@@ -253,6 +278,26 @@ public static class IdleCommands
         if (state.Order != null)
         {
             pm.SendMessage($"Order: {DescribeOrder(state.Order)}, {state.Order.Remaining:N0} of {state.Order.Requested:N0} left.");
+        }
+
+        var session = IdleOnlineWork.GetSession(pm);
+        if (session != null)
+        {
+            var rate = IdleOnlineWork.GetLiveRate(pm, state, def);
+            var since = IdleSummaryGump.FormatTime(Core.Now - IdleOnlineWork.GetWorkingSince(pm));
+            pm.SendMessage(0x59, $"Working now for {since} at {rate:P0} speed: {session.Attempts:N0} attempts, {session.Successes:N0} successes.");
+
+            foreach (var item in session.Items)
+            {
+                if (!item.Discarded)
+                {
+                    pm.SendMessage(0x59, $"  {item.Amount:N0} {item.Name} (pack {item.ToPack:N0}, bank {item.ToBank:N0})");
+                }
+            }
+        }
+        else
+        {
+            pm.SendMessage("Not working right now. [Idle resume starts again at the spot.");
         }
 
         var result = IdleSystem.Evaluate(pm, state, pm.Map, pm.Location);

@@ -92,6 +92,12 @@ public class IdleState
     /// <summary>Crafting-style tasks only.</summary>
     public IdleOrder Order { get; set; }
 
+    /// <summary>Start of live work since the character last left the world; drives the full-rate window. Not saved.</summary>
+    public DateTime OnlineSince { get; set; }
+
+    /// <summary>A stop rule broke during the logout delay, so no offline work follows. Not saved.</summary>
+    public IdleLogoutResult Interrupted { get; set; }
+
     public IdleState(PlayerMobile player) => Player = player;
 
     public void Serialize(IGenericWriter writer)

@@ -271,12 +271,29 @@ public class IdleSystem : GenericPersistence
         state.LogoutResult = offline ? IdleLogoutResult.Eligible : IdleLogoutResult.None;
         state.LogoutTime = offline ? Core.Now : default;
         state.Order = order;
+        state.Interrupted = IdleLogoutResult.None;
+
+        // In the world: the character starts working right away. Otherwise it works offline as before.
+        if (!offline)
+        {
+            IdleOnlineWork.TryStart(pm, out _);
+        }
 
         error = null;
         return true;
     }
 
-    public static bool StopTask(PlayerMobile pm) => pm != null && _states.Remove(pm);
+    /// <summary>Clears the task. Live work stops with the session totals.</summary>
+    public static bool StopTask(PlayerMobile pm)
+    {
+        if (pm == null || !_states.Remove(pm))
+        {
+            return false;
+        }
+
+        IdleOnlineWork.Stop(pm, "You stop working.", false);
+        return true;
+    }
 
     /// <summary>Whether leaving the world at this spot right now would earn offline progress.</summary>
     public static IdleLogoutResult Evaluate(PlayerMobile pm, IdleState state, Map map, Point3D location)
@@ -329,7 +346,10 @@ public class IdleSystem : GenericPersistence
         }
 
         state.LogoutTime = Core.Now;
-        state.LogoutResult = Evaluate(pm, state, m.Map, m.Location);
+        state.LogoutResult = state.Interrupted != IdleLogoutResult.None
+            ? state.Interrupted
+            : Evaluate(pm, state, m.Map, m.Location);
+        state.Interrupted = IdleLogoutResult.None;
     }
 
     /// <summary>
@@ -372,6 +392,7 @@ public class IdleSystem : GenericPersistence
     {
         if (!_pending.Remove(pm, out var pending))
         {
+            ResumeLiveWork(pm);
             return;
         }
 
@@ -395,6 +416,21 @@ public class IdleSystem : GenericPersistence
 
             ShowReport(pm, pending.Report);
         }
+
+        ResumeLiveWork(pm);
+    }
+
+    private static void ResumeLiveWork(PlayerMobile pm)
+    {
+        if (!Settings.Enabled || !Settings.ResumeOnLogin || GetState(pm) is not { } state)
+        {
+            return;
+        }
+
+        if (IdleOnlineWork.TryStart(pm, out _))
+        {
+            pm.SendMessage(0x59, $"You resume {GetTask(state.TaskId)?.Name ?? "your idle task"}. Moving away stops it.");
+        }
     }
 
     /// <summary>Settles a stretch of offline time for the character's current task.</summary>
@@ -414,6 +450,7 @@ public class IdleSystem : GenericPersistence
         if (mode != IdleSettleMode.Preview && state.Order?.Remaining <= 0)
         {
             _states.Remove(pm);
+            IdleOnlineWork.Stop(pm, null, false);
         }
 
         logger.Information(
@@ -439,6 +476,20 @@ public class IdleSystem : GenericPersistence
             Timer.StartTimer(TimeSpan.FromSeconds(2), () => IdleSummaryGump.DisplayTo(pm, report));
         }
     }
+
+    /// <summary>Why live work cannot start where the character stands.</summary>
+    public static string GetStartMessage(IdleLogoutResult result) =>
+        result switch
+        {
+            IdleLogoutResult.TaskUnavailable => "Your idle task is no longer available.",
+            IdleLogoutResult.NotAtTarget     => "You are not at your idle spot.",
+            IdleLogoutResult.Dead            => "You cannot work while dead.",
+            IdleLogoutResult.Criminal        => "You cannot work while flagged criminal.",
+            IdleLogoutResult.InCombat        => "You cannot work while in combat.",
+            IdleLogoutResult.NoSupplies      => "You lack the supplies your idle task needs.",
+            IdleLogoutResult.NoStation       => "You are not near the work station your idle task needs.",
+            _                                => "You cannot work right now."
+        };
 
     public static string GetResultMessage(IdleLogoutResult result) =>
         result switch

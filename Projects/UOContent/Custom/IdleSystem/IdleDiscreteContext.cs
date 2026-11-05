@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Server.Items;
+using Server.Misc;
 using Server.Mobiles;
 
 namespace Server.Custom.Idle;
@@ -13,6 +14,7 @@ public sealed class IdleDiscreteContext
 {
     private readonly bool _canGain;
     private readonly double _gainMultiplier;
+    private readonly bool _statGains;
 
     // A preview places nothing, so room is tracked as if the items had been placed.
     private int _previewPackWeight;
@@ -21,9 +23,10 @@ public sealed class IdleDiscreteContext
 
     internal IdleDiscreteContext(
         PlayerMobile pm, IdleTaskDefinition def, IdleSettleMode mode, IdleReport report, List<string> notes,
-        double seconds, bool canGain, double gainMultiplier
+        double seconds, bool canGain, double gainMultiplier, bool statGains = false
     )
     {
+        _statGains = statGains;
         Player = pm;
         Definition = def;
         Mode = mode;
@@ -48,6 +51,9 @@ public sealed class IdleDiscreteContext
 
     /// <summary>Online-equivalent seconds of work left.</summary>
     public double SecondsLeft { get; private set; }
+
+    /// <summary>Live work only: the current speed multiplier, so effects can be spaced to the real attempt length.</summary>
+    public double LiveRate { get; set; } = 1.0;
 
     public int Attempts { get; set; }
     public int Successes { get; set; }
@@ -79,13 +85,26 @@ public sealed class IdleDiscreteContext
             return;
         }
 
-        var chance = (skill.Value - minSkill) / (maxSkill - minSkill);
+        CheckSkillChance(skill, (skill.Value - minSkill) / (maxSkill - minSkill));
+    }
+
+    /// <summary>One skill check with a known success chance; see <see cref="CheckSkill"/>.</summary>
+    public void CheckSkillChance(Skill skill, double chance)
+    {
         if (chance < 0.0 || chance >= 1.0)
         {
             return;
         }
 
-        StatRolls += chance;
+        if (!Online)
+        {
+            StatRolls += chance;
+        }
+        else if (_statGains && chance >= Utility.RandomDouble())
+        {
+            // Live, stats use the server's own legacy gain: a successful check, limited by its stat gain delay.
+            SkillCheck.LegacyGain(Player, skill.Info);
+        }
 
         if (_canGain && Utility.RandomDouble() < IdleSettlement.GainChance(Player, skill, chance) * _gainMultiplier &&
             IdleSettlement.TryGain(Player, skill))

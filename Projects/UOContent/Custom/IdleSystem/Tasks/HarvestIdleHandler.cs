@@ -4,6 +4,7 @@ using System.Reflection;
 using Server.Engines.Harvest;
 using Server.Items;
 using Server.Mobiles;
+using Server.Targeting;
 
 namespace Server.Custom.Idle;
 
@@ -443,6 +444,172 @@ public class HarvestIdleRun : IdleTaskRun
     }
 
     /// <summary>Wears tools in the same order online harvesting would use them, one use per success.</summary>
+    /// <summary>
+    /// One live swing: the same attempt model as the offline settlement (success chance, skill checks, which
+    /// resource, how much, walking to fresh spots folded into the attempt time), rolled once with real dice.
+    /// </summary>
+    public override double LiveStep(IdleDiscreteContext context)
+    {
+        Item tool = null;
+        foreach (var t in _tools)
+        {
+            if (!t.Deleted)
+            {
+                tool = t;
+                break;
+            }
+        }
+
+        if (tool == null)
+        {
+            context.Report.StopReason = SuppliesExhaustedMessage;
+            return -1;
+        }
+
+        var skill = _pm.Skills[_definition.Skill];
+        var model = new IdleAttemptModel();
+        Evaluate(skill.Base, skill.Value, model);
+
+        if (model.SecondsPerAttempt <= 0)
+        {
+            context.Report.StopReason = "There is nothing here you can harvest.";
+            return -1;
+        }
+
+        PlayEffects(tool, model.SecondsPerAttempt / Math.Max(context.LiveRate, 0.01));
+
+        context.Attempts++;
+
+        // Which check this swing makes, by the same weights the settlement averages over (a missing weight is a
+        // swing with no check at all, e.g. a resource the skill is too low for).
+        var roll = Utility.RandomDouble();
+        var chance = -1.0;
+        foreach (var (weight, checkChance) in model.Checks)
+        {
+            if (roll < weight)
+            {
+                chance = checkChance;
+                break;
+            }
+
+            roll -= weight;
+        }
+
+        if (chance < 0.0)
+        {
+            return model.SecondsPerAttempt;
+        }
+
+        context.CheckSkillChance(skill, chance);
+
+        if (Math.Clamp(chance, 0.0, 1.0) <= Utility.RandomDouble())
+        {
+            return model.SecondsPerAttempt;
+        }
+
+        context.Successes++;
+        ConsumeSupplies(1);
+
+        if (tool.Deleted)
+        {
+            context.Notify("You have worn out your tool!");
+        }
+
+        // Given a success, one resource by its share of the expected yield, in the expected amount per success.
+        var total = 0.0;
+        foreach (var (_, amount) in model.Yield)
+        {
+            total += amount;
+        }
+
+        var p = model.SuccessChance;
+        if (total <= 0 || p <= 0)
+        {
+            return model.SecondsPerAttempt;
+        }
+
+        var pick = Utility.RandomDouble() * total;
+        foreach (var (type, amount) in model.Yield)
+        {
+            pick -= amount;
+            if (pick > 0)
+            {
+                continue;
+            }
+
+            Deliver(context, type, IdleSettlement.RoundRandom(total / p));
+            break;
+        }
+
+        return model.SecondsPerAttempt;
+    }
+
+    private void Deliver(IdleDiscreteContext context, Type type, int amount)
+    {
+        var discard = _def.DiscardTypes.Contains(type);
+        var line = IdleSettlement.Deliver(_pm, type, amount, !discard, context.Report.PackLimit, false);
+        if (line == null)
+        {
+            return;
+        }
+
+        line.Discarded = discard;
+
+        if (line.ToBank > 0)
+        {
+            context.Notify($"{line.ToBank:N0} {line.Name} sent to your bank box.");
+        }
+
+        if (line.Lost > 0)
+        {
+            context.Notify($"There is no room for {line.Lost:N0} {line.Name}.");
+        }
+
+        context.MergeLine(line);
+    }
+
+    /// <summary>
+    /// The harvest system's own start hook (e.g. the fishing splash) and its swing animation and sound, as many
+    /// swings as fit in the attempt.
+    /// </summary>
+    private void PlayEffects(Item tool, double seconds)
+    {
+        var target = new LandTarget(_target.Location, _target.Map);
+        _system.OnHarvestStarted(_pm, tool, _definition, target);
+
+        var swings = _definition.EffectCounts.Length > 0 ? _definition.EffectCounts.RandomElement() : 1;
+        var spacing = _definition.EffectDelay.TotalSeconds;
+        if (spacing > 0)
+        {
+            swings = Math.Clamp(swings, 1, Math.Max(1, (int)(seconds / spacing)));
+        }
+
+        for (var i = 0; i < swings; i++)
+        {
+            Timer.StartTimer(TimeSpan.FromSeconds(spacing * i), () => Swing(tool, target));
+        }
+    }
+
+    private void Swing(Item tool, LandTarget target)
+    {
+        if (_pm.Deleted || _pm.Map != _target.Map || !IdleOnlineWork.IsWorking(_pm))
+        {
+            return;
+        }
+
+        _system.DoHarvestingEffect(_pm, tool, _definition, _target.Map, _target.Location);
+        Timer.StartTimer(
+            _definition.EffectSoundDelay,
+            () =>
+            {
+                if (!_pm.Deleted && IdleOnlineWork.IsWorking(_pm))
+                {
+                    _system.DoHarvestingSound(_pm, tool, _definition, target);
+                }
+            }
+        );
+    }
+
     public override void ConsumeSupplies(int successes)
     {
         if (_successesAllowed == int.MaxValue)

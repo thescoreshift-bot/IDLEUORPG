@@ -85,6 +85,13 @@ public abstract class IdleTaskRun
     public virtual void Describe(List<string> notes)
     {
     }
+
+    /// <summary>
+    /// Live work: one attempt with its animation and sound, results delivered at once, under the same rules as the
+    /// offline settlement. Returns the online seconds the attempt takes, or a negative value when work cannot go on
+    /// (the report's stop reason says why).
+    /// </summary>
+    public virtual double LiveStep(IdleDiscreteContext context) => -1;
 }
 
 /// <summary>

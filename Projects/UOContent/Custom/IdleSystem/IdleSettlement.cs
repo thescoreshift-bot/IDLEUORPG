@@ -238,6 +238,38 @@ public static class IdleSettlement
         return Finish(pm, report, notes, mode, skillSnapshot, startStr, startDex, startInt);
     }
 
+    /// <summary>Whether legacy (once per delay) stat gains apply to idle work.</summary>
+    internal static bool StatGainsActive => IdleSystem.Settings.SkillGain.StatGains && !_usePub45StatGain;
+
+    /// <summary>
+    /// The context live work runs in: no time limit (the worker's timer paces it), the same gain rules as offline,
+    /// and stats through the server's own legacy gain.
+    /// </summary>
+    internal static IdleDiscreteContext CreateLiveContext(
+        PlayerMobile pm, IdleTaskDefinition def, IdleTaskHandler handler, IdleTarget target, IdleReport report
+    )
+    {
+        var settings = IdleSystem.Settings;
+        var skill = pm.Skills[handler.GetSkill(def)];
+        var region = Region.Find(target.Location, target.Map);
+        var regionAllowsGain = pm.Skills.Cap > 0 && skill != null && region.AllowGain(pm, skill, target.Location);
+        var gainMultiplier = settings.SkillGain.GainChanceMultiplier * def.SkillGainMultiplier;
+        var canGain = settings.SkillGain.Enabled && gainMultiplier > 0 && regionAllowsGain;
+
+        return new IdleDiscreteContext(
+            pm, def, IdleSettleMode.Online, report, null, double.PositiveInfinity, canGain, gainMultiplier,
+            StatGainsActive && regionAllowsGain
+        );
+    }
+
+    /// <summary>The backpack fill limit right now: max weight minus the reserve, never below what is carried.</summary>
+    internal static void SetLivePackLimit(PlayerMobile pm, IdleReport report)
+    {
+        report.WeightLimit = pm.MaxWeight;
+        report.KeepFreeStones = Math.Max(0, IdleSystem.Settings.KeepFreeStones);
+        report.PackLimit = Math.Max(report.WeightLimit - report.KeepFreeStones, CarriedWeight(pm));
+    }
+
     private static void SetWeightBaseline(PlayerMobile pm, IdleReport report, IdleSettings settings, IdleSettleMode mode)
     {
         report.WeightLimit = pm.MaxWeight;
