@@ -460,11 +460,6 @@ public static class IdleCommands
 
             foreach (var item in report.Items)
             {
-                if (item.Exceptional > 0)
-                {
-                    from.SendMessage(0x59, $"  ({item.Exceptional:N0} of {item.Amount:N0} {item.Name} exceptional)");
-                }
-
                 if (item.Discarded)
                 {
                     from.SendMessage(0x59, $"Discarded: {item.Amount:N0} {item.Name}");
@@ -479,6 +474,11 @@ public static class IdleCommands
                         0x59,
                         $"Gave: {item.Amount:N0} {item.Name} (pack {item.ToPack:N0}, bank {item.ToBank:N0}, lost {item.Lost:N0})"
                     );
+                }
+
+                if (item.Exceptional > 0)
+                {
+                    from.SendMessage(0x59, $"  of which exceptional: {item.Exceptional:N0}");
                 }
             }
 
