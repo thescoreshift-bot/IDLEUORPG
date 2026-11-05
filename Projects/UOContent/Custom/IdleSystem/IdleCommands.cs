@@ -2,6 +2,7 @@ using System;
 using Server.Commands;
 using Server.Mobiles;
 using Server.Targeting;
+using Server.Text;
 
 namespace Server.Custom.Idle;
 
@@ -13,8 +14,11 @@ public static class IdleCommands
         CommandSystem.Register("IdleSim", AccessLevel.GameMaster, IdleSim_OnCommand);
     }
 
-    [Usage("Idle [stop | status | list | at <location>]")]
-    [Description("Choose the spot your character works while you are logged out. With no argument, target the spot.")]
+    [Usage("Idle [stop | status | list | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]")]
+    [Description(
+        "Choose the spot your character works while you are logged out. With no argument, target the spot. " +
+        "smelt/craft start an order where you stand; 'at <location>' can be followed by the same order."
+    )]
     public static void Idle_OnCommand(CommandEventArgs e)
     {
         if (e.Mobile is not PlayerMobile pm)
@@ -53,23 +57,159 @@ public static class IdleCommands
                 }
             case "at" when e.Length > 1:
                 {
-                    if (IdleSystem.TryStartTaskAt(pm, e.GetString(1), out var error))
-                    {
-                        SendStarted(pm);
-                    }
-                    else
-                    {
-                        pm.SendMessage(0x22, error);
-                    }
-
+                    StartAt(pm, e);
+                    break;
+                }
+            case "smelt" or "craft":
+                {
+                    StartHere(pm, e);
                     break;
                 }
             default:
                 {
-                    pm.SendMessage("Usage: [Idle [stop | status | list | at <location>]");
+                    pm.SendMessage(
+                        "Usage: [Idle [stop | status | list | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]"
+                    );
                     break;
                 }
         }
+    }
+
+    /// <summary>Task kind that carries out an order verb.</summary>
+    private static string KindForVerb(string verb) =>
+        verb switch
+        {
+            "smelt" => "Smelt",
+            "craft" => "Craft",
+            _       => null
+        };
+
+    /// <summary>Reads "smelt &lt;amount&gt;" or "craft &lt;recipe&gt; &lt;amount&gt; [material]" starting at argument <paramref name="start"/>.</summary>
+    private static bool TryParseOrder(CommandEventArgs e, int start, out string verb, out IdleOrder order, out string error)
+    {
+        verb = e.Length > start ? e.GetString(start).ToLowerInvariant() : null;
+        order = null;
+        error = null;
+
+        if (verb == null)
+        {
+            return true;
+        }
+
+        switch (verb)
+        {
+            case "smelt" when e.Length > start + 1:
+                {
+                    order = new IdleOrder { Requested = e.GetInt32(start + 1) };
+                    break;
+                }
+            case "craft" when e.Length > start + 2:
+                {
+                    order = new IdleOrder
+                    {
+                        RecipeId = e.GetString(start + 1),
+                        Requested = e.GetInt32(start + 2),
+                        Material = e.Length > start + 3 ? e.GetString(start + 3) : null
+                    };
+                    break;
+                }
+            default:
+                {
+                    error = "Orders are: smelt <amount>, or craft <recipe> <amount> [material].";
+                    return false;
+                }
+        }
+
+        if (order.Requested is <= 0 or > 100000)
+        {
+            error = "The amount must be between 1 and 100000.";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static void StartAt(PlayerMobile pm, CommandEventArgs e)
+    {
+        var locationId = e.GetString(1);
+
+        if (!TryParseOrder(e, 2, out var verb, out var order, out var error))
+        {
+            pm.SendMessage(0x22, error);
+            return;
+        }
+
+        if (verb == null)
+        {
+            if (IdleSystem.TryStartTaskAt(pm, locationId, out error))
+            {
+                SendStarted(pm);
+            }
+            else
+            {
+                pm.SendMessage(0x22, error);
+            }
+
+            return;
+        }
+
+        if (!IdleSystem.Locations.TryGetValue(locationId, out var loc))
+        {
+            pm.SendMessage(0x22, "Unknown idle location.");
+            return;
+        }
+
+        var kind = KindForVerb(verb);
+        string firstError = null;
+
+        foreach (var taskId in loc.AllTaskIds())
+        {
+            if (IdleSystem.GetTask(taskId)?.Kind.InsensitiveEquals(kind) != true)
+            {
+                continue;
+            }
+
+            if (IdleSystem.TryStartTaskAt(pm, locationId, out error, taskId, order))
+            {
+                SendStarted(pm);
+                return;
+            }
+
+            firstError ??= error;
+        }
+
+        pm.SendMessage(0x22, firstError ?? "That cannot be done at that location.");
+    }
+
+    private static void StartHere(PlayerMobile pm, CommandEventArgs e)
+    {
+        if (!TryParseOrder(e, 0, out var verb, out var order, out var error))
+        {
+            pm.SendMessage(0x22, error);
+            return;
+        }
+
+        var kind = KindForVerb(verb);
+        var target = new IdleTarget(IdleTarget.Here, pm.Map, pm.Location);
+        string firstError = null;
+
+        foreach (var def in IdleSystem.Tasks.Values)
+        {
+            if (!def.Kind.InsensitiveEquals(kind))
+            {
+                continue;
+            }
+
+            if (IdleSystem.TryStartTask(pm, def.Id, target, out error, order))
+            {
+                SendStarted(pm);
+                return;
+            }
+
+            firstError ??= error;
+        }
+
+        pm.SendMessage(0x22, firstError ?? "That idle task is not available.");
     }
 
     private static void SendStarted(PlayerMobile pm)
@@ -83,6 +223,12 @@ public static class IdleCommands
 
         var range = IdleTaskHandler.Get(def.Kind).GetRange(def);
         pm.SendMessage(0x59, $"Idle task set: {def.Name} at {state.Target.Location} ({state.Target.LocationId}).");
+
+        if (state.Order != null)
+        {
+            pm.SendMessage(0x59, $"Order: {DescribeOrder(state.Order)}.");
+        }
+
         pm.SendMessage(0x59, $"Log out within {range} tiles of this spot and your character will keep working while you are away.");
     }
 
@@ -99,6 +245,11 @@ public static class IdleCommands
 
         pm.SendMessage($"Idle task: {def.Name} at {state.Target.Location} on {state.Target.Map} ({state.Target.LocationId}).");
 
+        if (state.Order != null)
+        {
+            pm.SendMessage($"Order: {DescribeOrder(state.Order)}, {state.Order.Remaining:N0} of {state.Order.Requested:N0} left.");
+        }
+
         var result = IdleSystem.Evaluate(pm, state, pm.Map, pm.Location);
         if (result == IdleLogoutResult.Eligible)
         {
@@ -110,6 +261,11 @@ public static class IdleCommands
         }
     }
 
+    public static string DescribeOrder(IdleOrder order) =>
+        order.RecipeId == null
+            ? $"smelt {order.Requested:N0} ore"
+            : $"craft {order.Requested:N0} {order.RecipeId}{(order.Material != null ? $" from {order.Material}" : "")}";
+
     private static void SendLocations(PlayerMobile pm)
     {
         if (IdleSystem.Locations.Count == 0)
@@ -120,7 +276,18 @@ public static class IdleCommands
 
         foreach (var loc in IdleSystem.Locations.Values)
         {
-            pm.SendMessage($"{loc.Id}: {loc.Name} ({IdleSystem.GetTask(loc.TaskId)?.Name}) at {loc.Location} on {loc.Map}");
+            using var tasks = ValueStringBuilder.Create();
+            foreach (var taskId in loc.AllTaskIds())
+            {
+                if (tasks.Length > 0)
+                {
+                    tasks.Append(", ");
+                }
+
+                tasks.Append(IdleSystem.GetTask(taskId)?.Name ?? taskId);
+            }
+
+            pm.SendMessage($"{loc.Id}: {loc.Name} ({tasks.AsSpan()}) at {loc.Location} on {loc.Map}");
         }
     }
 
@@ -233,8 +400,18 @@ public static class IdleCommands
                 from.SendMessage(0x3B2, note);
             }
 
+            foreach (var used in report.Used)
+            {
+                from.SendMessage(0x59, $"Used: {used.Amount:N0} {used.Name}");
+            }
+
             foreach (var item in report.Items)
             {
+                if (item.Exceptional > 0)
+                {
+                    from.SendMessage(0x59, $"  ({item.Exceptional:N0} of {item.Amount:N0} {item.Name} exceptional)");
+                }
+
                 if (item.Discarded)
                 {
                     from.SendMessage(0x59, $"Discarded: {item.Amount:N0} {item.Name}");
@@ -273,6 +450,11 @@ public static class IdleCommands
             foreach (var stat in report.Stats)
             {
                 from.SendMessage(0x59, $"Stat: {stat.Name} {stat.From} -> {stat.To}");
+            }
+
+            if (report.OrderStatus != null)
+            {
+                from.SendMessage(0x59, $"Order: {report.OrderStatus}");
             }
 
             if (report.StopReason != null)

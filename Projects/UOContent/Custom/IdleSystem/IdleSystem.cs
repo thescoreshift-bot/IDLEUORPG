@@ -134,10 +134,25 @@ public class IdleSystem : GenericPersistence
 
         foreach (var loc in catalog.Locations)
         {
-            if (string.IsNullOrWhiteSpace(loc.Id) || loc.Map == null || !_tasks.ContainsKey(loc.TaskId ?? ""))
+            var hasTask = false;
+            foreach (var taskId in loc.AllTaskIds())
+            {
+                hasTask |= _tasks.ContainsKey(taskId);
+            }
+
+            if (string.IsNullOrWhiteSpace(loc.Id) || loc.Map == null || !hasTask)
             {
                 logger.Warning("Idle location {Id}: missing id, map, or a loaded task", loc.Id);
                 continue;
+            }
+
+            foreach (var taskId in loc.AllTaskIds())
+            {
+                var def = GetTask(taskId);
+                if (def != null && !IdleTaskHandler.Get(def.Kind).CheckStation(null, def, loc.Map, loc.Location, out var error))
+                {
+                    logger.Warning("Idle location {Id} ({Task}): {Error}", loc.Id, taskId, error);
+                }
             }
 
             _locations[loc.Id] = loc;
@@ -152,8 +167,13 @@ public class IdleSystem : GenericPersistence
 
     public static bool IsInCombat(Mobile m) => m.Combatant != null || m.Aggressors.Count > 0 || m.Aggressed.Count > 0;
 
-    /// <summary>Starts a task at a named location from the catalog. Entry point for non-click sources.</summary>
-    public static bool TryStartTaskAt(PlayerMobile pm, string locationId, out string error)
+    /// <summary>
+    /// Starts a task at a named location from the catalog. Entry point for non-click sources. A location that serves
+    /// several tasks needs <paramref name="taskId"/>; crafting-style tasks need an <paramref name="order"/>.
+    /// </summary>
+    public static bool TryStartTaskAt(
+        PlayerMobile pm, string locationId, out string error, string taskId = null, IdleOrder order = null
+    )
     {
         if (locationId == null || !_locations.TryGetValue(locationId, out var loc))
         {
@@ -161,14 +181,39 @@ public class IdleSystem : GenericPersistence
             return false;
         }
 
-        return TryStartTask(pm, loc.TaskId, new IdleTarget(loc.Id, loc.Map, loc.Location), out error);
+        if (taskId == null)
+        {
+            taskId = loc.TaskId;
+            foreach (var id in loc.AllTaskIds())
+            {
+                taskId ??= id;
+            }
+        }
+        else
+        {
+            var supported = false;
+            foreach (var id in loc.AllTaskIds())
+            {
+                supported |= id.InsensitiveEquals(taskId);
+            }
+
+            if (!supported)
+            {
+                error = "That task cannot be done at that location.";
+                return false;
+            }
+        }
+
+        return TryStartTask(pm, taskId, new IdleTarget(loc.Id, loc.Map, loc.Location), out error, order);
     }
 
     /// <summary>
     /// Registers a task, replacing any current one. The character must be (or have logged out) within range of
     /// the target. For a character already logged out, offline time starts counting now.
     /// </summary>
-    public static bool TryStartTask(PlayerMobile pm, string taskId, IdleTarget target, out string error)
+    public static bool TryStartTask(
+        PlayerMobile pm, string taskId, IdleTarget target, out string error, IdleOrder order = null
+    )
     {
         var def = GetTask(taskId);
         var handler = IdleTaskHandler.Get(def?.Kind);
@@ -208,9 +253,15 @@ public class IdleSystem : GenericPersistence
             return false;
         }
 
-        if (!handler.ValidateTarget(pm, def, target, out error) || !handler.HasSupplies(pm, def, out error))
+        if (!handler.ValidateTarget(pm, def, target, out error) || !handler.ValidateOrder(pm, def, order, out error) ||
+            !handler.CheckStation(pm, def, map, location, out error) || !handler.HasSupplies(pm, def, order, out error))
         {
             return false;
+        }
+
+        if (order != null)
+        {
+            order.Remaining = order.Requested;
         }
 
         var state = GetState(pm) ?? (_states[pm] = new IdleState(pm));
@@ -219,6 +270,7 @@ public class IdleSystem : GenericPersistence
         state.StartedAt = Core.Now;
         state.LogoutResult = offline ? IdleLogoutResult.Eligible : IdleLogoutResult.None;
         state.LogoutTime = offline ? Core.Now : default;
+        state.Order = order;
 
         error = null;
         return true;
@@ -257,7 +309,12 @@ public class IdleSystem : GenericPersistence
             return IdleLogoutResult.NotAtTarget;
         }
 
-        return handler.HasSupplies(pm, def, out _) ? IdleLogoutResult.Eligible : IdleLogoutResult.NoSupplies;
+        if (!handler.CheckStation(pm, def, map, location, out _))
+        {
+            return IdleLogoutResult.NoStation;
+        }
+
+        return handler.HasSupplies(pm, def, state.Order, out _) ? IdleLogoutResult.Eligible : IdleLogoutResult.NoSupplies;
     }
 
     /// <summary>
@@ -351,7 +408,13 @@ public class IdleSystem : GenericPersistence
             return null;
         }
 
-        var report = IdleSettlement.Settle(pm, def, handler, state.Target, away, mode);
+        var report = IdleSettlement.Settle(pm, def, handler, state.Target, state.Order, away, mode);
+
+        // A finished order ends the task; the summary says so through the order status.
+        if (mode != IdleSettleMode.Preview && state.Order?.Remaining <= 0)
+        {
+            _states.Remove(pm);
+        }
 
         logger.Information(
             "Idle settle {Player}: task {Task}, {Counted} counted, {Attempts} attempts, {Successes} successes ({Mode})",
@@ -386,6 +449,7 @@ public class IdleSystem : GenericPersistence
             IdleLogoutResult.Criminal        => "You logged out while criminal, so no offline work was done.",
             IdleLogoutResult.InCombat        => "You logged out while in combat, so no offline work was done.",
             IdleLogoutResult.NoSupplies      => "You logged out without the supplies your idle task needs.",
+            IdleLogoutResult.NoStation       => "You logged out away from the work station your idle task needs.",
             _                                => "No offline work was done."
         };
 

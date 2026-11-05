@@ -40,8 +40,18 @@ public class IdleSummaryGump : DynamicGump
             $"While you were away ({report.TaskName}{(report.Simulated ? ", simulated" : "")}): {FormatTime(report.Counted)} counted, {report.Attempts:N0} attempts, {report.Successes:N0} successes."
         );
 
+        foreach (var used in report.Used)
+        {
+            pm.SendMessage(0x59, $"  Used {used.Amount:N0} {used.Name}");
+        }
+
         foreach (var item in report.Items)
         {
+            if (item.Exceptional > 0)
+            {
+                pm.SendMessage(0x59, $"  {item.Exceptional:N0} of the {item.Name} are exceptional");
+            }
+
             if (item.Discarded)
             {
                 pm.SendMessage(0x59, $"  {item.Amount:N0} {item.Name} (discarded)");
@@ -65,6 +75,11 @@ public class IdleSummaryGump : DynamicGump
         foreach (var move in report.MovedToBank)
         {
             pm.SendMessage(0x22, $"  You were overloaded: {move.Amount:N0} {move.Name} ({move.Weight} stones) moved to your bank.");
+        }
+
+        if (report.OrderStatus != null)
+        {
+            pm.SendMessage(0x59, $"  Order: {report.OrderStatus}");
         }
 
         if (report.StopReason != null)
@@ -107,6 +122,11 @@ public class IdleSummaryGump : DynamicGump
         foreach (var item in r.Items)
         {
             sb.Append($"- {item.Amount:N0} {item.Name}");
+            if (item.Exceptional > 0)
+            {
+                sb.Append($" ({item.Exceptional:N0} exceptional)");
+            }
+
             if (item.Discarded)
             {
                 sb.Append(" - discarded");
@@ -130,6 +150,20 @@ public class IdleSummaryGump : DynamicGump
             sb.Append(
                 $"<BASEFONT COLOR=#FF6060>- Overloaded: {move.Amount:N0} {move.Name} ({move.Weight} stones) moved to your bank</BASEFONT><BASEFONT COLOR=#FFFFFF><BR>"
             );
+        }
+
+        if (r.Used.Count > 0)
+        {
+            sb.Append("<BR><B>Used</B><BR>");
+            foreach (var used in r.Used)
+            {
+                sb.Append($"- {used.Amount:N0} {used.Name}<BR>");
+            }
+        }
+
+        if (r.OrderStatus != null)
+        {
+            sb.Append($"<BR><B>Order:</B> {r.OrderStatus}<BR>");
         }
 
         sb.Append("<BR><B>Skill gains</B><BR>");

@@ -35,6 +35,15 @@ public class IdleReport
     /// <summary>Stacks the weight safety pass moved from the backpack to the bank.</summary>
     public List<IdleMoveLine> MovedToBank { get; } = new();
 
+    /// <summary>Materials, ore, and tool uses spent (crafting-style tasks).</summary>
+    public List<IdleUsedLine> Used { get; } = new();
+
+    /// <summary>Order progress, e.g. "7 of 10 made, 3 left". Null for tasks without an order.</summary>
+    public string OrderStatus { get; set; }
+
+    /// <summary>Non-stackable items this settlement placed, so the safety pass never moves the player's own copies.</summary>
+    public HashSet<Item> PlacedItems { get; } = new();
+
     /// <summary>Which rules applied and the exact numbers, for staff simulations. Empty on real logins.</summary>
     public List<string> Notes { get; } = new();
 }
@@ -58,7 +67,10 @@ public class IdleItemLine
     public int ItemId { get; init; }
     public int Hue { get; init; }
     public string Name { get; init; }
-    public int Amount { get; init; }
+    public int Amount { get; set; }
+
+    /// <summary>How many of <see cref="Amount"/> came out exceptional (crafted items).</summary>
+    public int Exceptional { get; set; }
     public int ToPack { get; set; }
     public int ToBank { get; set; }
 
@@ -73,3 +85,9 @@ public record IdleSkillLine(string Name, double From, double To);
 public record IdleStatLine(string Name, int From, int To);
 
 public record IdleMoveLine(string Name, int Amount, int Weight);
+
+public class IdleUsedLine
+{
+    public string Name { get; init; }
+    public int Amount { get; set; }
+}

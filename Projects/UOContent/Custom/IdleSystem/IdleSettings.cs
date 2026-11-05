@@ -92,6 +92,9 @@ public class IdleTaskDefinition
 
     [JsonIgnore]
     public HashSet<Type> DiscardTypes { get; } = new();
+
+    /// <summary>Craft kind: craft system name ("Blacksmithy").</summary>
+    public string CraftSystem { get; set; }
 }
 
 public enum IdleVeinMode
@@ -105,6 +108,26 @@ public class IdleLocation
     public string Id { get; set; }
     public string Name { get; set; }
     public string TaskId { get; set; }
+
+    /// <summary>Further tasks this spot supports (e.g. a smithy serves both smelting and blacksmithing).</summary>
+    public List<string> TaskIds { get; set; } = new();
+
     public Map Map { get; set; }
     public Point3D Location { get; set; }
+
+    public IEnumerable<string> AllTaskIds()
+    {
+        if (!string.IsNullOrEmpty(TaskId))
+        {
+            yield return TaskId;
+        }
+
+        foreach (var id in TaskIds)
+        {
+            if (!string.IsNullOrEmpty(id) && !id.InsensitiveEquals(TaskId))
+            {
+                yield return id;
+            }
+        }
+    }
 }

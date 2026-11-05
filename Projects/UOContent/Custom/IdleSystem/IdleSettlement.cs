@@ -34,7 +34,8 @@ public static class IdleSettlement
     }
 
     public static IdleReport Settle(
-        PlayerMobile pm, IdleTaskDefinition def, IdleTaskHandler handler, IdleTarget target, TimeSpan away, IdleSettleMode mode
+        PlayerMobile pm, IdleTaskDefinition def, IdleTaskHandler handler, IdleTarget target, IdleOrder order, TimeSpan away,
+        IdleSettleMode mode
     )
     {
         var settings = IdleSystem.Settings;
@@ -57,9 +58,9 @@ public static class IdleSettlement
         }
 
         // A preview runs the real gain code, then puts every skill and stat back.
-        var skillSnapshot = mode == IdleSettleMode.Preview ? SnapshotSkills(pm) : null;
+        var skillSnapshot = SnapshotSkills(pm);
 
-        var run = handler.BeginRun(pm, def, target);
+        var run = handler.BeginRun(pm, def, target, order);
 
         // Region rules (e.g. jail) still apply; the anti-macro check does not, since unattended repetition
         // is the whole point here and is instead limited by the offline rate and time cap.
@@ -68,7 +69,6 @@ public static class IdleSettlement
         var gainMultiplier = settings.SkillGain.GainChanceMultiplier * def.SkillGainMultiplier;
         var canGain = settings.SkillGain.Enabled && gainMultiplier > 0 && regionAllowsGain;
 
-        var startBase = skill.Base;
         var startStr = pm.RawStr;
         var startDex = pm.RawDex;
         var startInt = pm.RawInt;
@@ -88,6 +88,28 @@ public static class IdleSettlement
                 $"Skill gain: {(canGain ? "on" : "off")} (x{gainMultiplier:0.##}, region {(regionAllowsGain ? "allows" : "blocks")}, anti-macro not applied offline)"
             );
             run.Describe(notes);
+        }
+
+        if (run is IdleDiscreteTaskRun discrete)
+        {
+            SetWeightBaseline(pm, report, settings, mode);
+
+            var context = new IdleDiscreteContext(pm, def, mode, report, notes, budget, canGain, gainMultiplier);
+            discrete.Run(context);
+
+            report.Attempts = context.Attempts;
+            report.Successes = context.Successes;
+
+            notes?.Add(
+                $"Totals: {context.Attempts:N0} attempts, {context.Successes:N0} successes, {context.Gains} skill gain event(s), {budget - context.SecondsLeft:N0}s of {budget:N0}s used"
+            );
+
+            if (settings.SkillGain.StatGains && !_usePub45StatGain && regionAllowsGain)
+            {
+                ApplyStatGains(pm, skill.Info, counted, context.StatRolls, notes);
+            }
+
+            return Finish(pm, report, notes, mode, skillSnapshot, startStr, startDex, startInt);
         }
 
         var yields = new Dictionary<Type, double>();
@@ -198,6 +220,26 @@ public static class IdleSettlement
             ApplyStatGains(pm, skill.Info, counted, statRolls, notes);
         }
 
+        SetWeightBaseline(pm, report, settings, mode);
+
+        foreach (var (type, expected) in yields)
+        {
+            var amount = RoundRandom(expected);
+            var discard = def.DiscardTypes.Contains(type);
+            var line = Deliver(pm, type, amount, mode != IdleSettleMode.Preview && !discard, report.PackLimit);
+            if (line != null)
+            {
+                report.Items.Add(line);
+                line.Discarded = discard;
+                notes?.Add($"Yield: {line.Name} expected {expected:N2} -> {amount:N0}{(discard ? " (discarded)" : "")}");
+            }
+        }
+
+        return Finish(pm, report, notes, mode, skillSnapshot, startStr, startDex, startInt);
+    }
+
+    private static void SetWeightBaseline(PlayerMobile pm, IdleReport report, IdleSettings settings, IdleSettleMode mode)
+    {
         report.WeightLimit = pm.MaxWeight;
         report.WeightBefore = CarriedWeight(pm);
         report.KeepFreeStones = Math.Max(0, settings.KeepFreeStones);
@@ -219,20 +261,13 @@ public static class IdleSettlement
                 pm.Str
             );
         }
+    }
 
-        foreach (var (type, expected) in yields)
-        {
-            var amount = RoundRandom(expected);
-            var discard = def.DiscardTypes.Contains(type);
-            var line = Deliver(pm, type, amount, mode != IdleSettleMode.Preview && !discard, report.PackLimit);
-            if (line != null)
-            {
-                report.Items.Add(line);
-                line.Discarded = discard;
-                notes?.Add($"Yield: {line.Name} expected {expected:N2} -> {amount:N0}{(discard ? " (discarded)" : "")}");
-            }
-        }
-
+    private static IdleReport Finish(
+        PlayerMobile pm, IdleReport report, List<string> notes, IdleSettleMode mode, int[] skillSnapshot, int startStr,
+        int startDex, int startInt
+    )
+    {
         if (mode != IdleSettleMode.Preview)
         {
             EnforceWeightLimit(pm, report);
@@ -255,16 +290,20 @@ public static class IdleSettlement
             );
         }
 
-        if (skill.Base != startBase)
+        var skills = pm.Skills;
+        for (var i = 0; i < skillSnapshot.Length; i++)
         {
-            report.Skills.Add(new IdleSkillLine(skill.Name, startBase, skill.Base));
+            if (skills[i].BaseFixedPoint != skillSnapshot[i])
+            {
+                report.Skills.Add(new IdleSkillLine(skills[i].Name, skillSnapshot[i] / 10.0, skills[i].Base));
+            }
         }
 
         AddStatLine(report, "Strength", startStr, pm.RawStr);
         AddStatLine(report, "Dexterity", startDex, pm.RawDex);
         AddStatLine(report, "Intelligence", startInt, pm.RawInt);
 
-        if (skillSnapshot != null)
+        if (mode == IdleSettleMode.Preview)
         {
             RestoreSkills(pm, skillSnapshot, startStr, startDex, startInt);
         }
@@ -306,41 +345,39 @@ public static class IdleSettlement
     /// </summary>
     private static double GainChancePerAttempt(PlayerMobile pm, Skill skill, IdleAttemptModel model)
     {
-        var skills = pm.Skills;
         var total = 0.0;
 
         foreach (var (weight, chance) in model.Checks)
         {
-            if (chance < 0.0 || chance >= 1.0)
+            if (chance >= 0.0 && chance < 1.0)
             {
-                continue;
+                total += weight * GainChance(pm, skill, chance);
             }
-
-            double gc;
-
-            if (skill.Base < 10.0)
-            {
-                gc = 1.0;
-            }
-            else
-            {
-                gc = (double)(skills.Cap - skills.Total) / skills.Cap;
-                gc += (skill.Cap - skill.Base) / skill.Cap;
-                gc /= 2;
-
-                // Online: + (1 - chance) * (success ? 0.5 : failBonus); averaged over the success roll here.
-                var failBonus = Core.AOS ? 0.0 : 0.2;
-                gc += (1.0 - chance) * (chance * 0.5 + (1.0 - chance) * failBonus);
-                gc /= 2;
-
-                gc *= skill.Info.GainFactor;
-                gc = Math.Max(gc, 0.01);
-            }
-
-            total += weight * gc;
         }
 
         return total;
+    }
+
+    /// <summary>Gain chance of one CheckSkill call with success chance <paramref name="chance"/> (0 to below 1).</summary>
+    internal static double GainChance(PlayerMobile pm, Skill skill, double chance)
+    {
+        if (skill.Base < 10.0)
+        {
+            return 1.0;
+        }
+
+        var skills = pm.Skills;
+        var gc = (double)(skills.Cap - skills.Total) / skills.Cap;
+        gc += (skill.Cap - skill.Base) / skill.Cap;
+        gc /= 2;
+
+        // Online: + (1 - chance) * (success ? 0.5 : failBonus); averaged over the success roll here.
+        var failBonus = Core.AOS ? 0.0 : 0.2;
+        gc += (1.0 - chance) * (chance * 0.5 + (1.0 - chance) * failBonus);
+        gc /= 2;
+
+        gc *= skill.Info.GainFactor;
+        return Math.Max(gc, 0.01);
     }
 
     /// <summary>Legacy stat gains roll on each successful, challenging check.</summary>
@@ -359,7 +396,7 @@ public static class IdleSettlement
     }
 
     /// <summary>Uses the real gain routine so caps, locks, and lowering "down" skills behave exactly as online.</summary>
-    private static bool TryGain(PlayerMobile pm, Skill skill)
+    internal static bool TryGain(PlayerMobile pm, Skill skill)
     {
         if (skill.Lock != SkillLock.Up || skill.Base >= skill.Cap)
         {
@@ -462,7 +499,7 @@ public static class IdleSettlement
             UnitWeight = sample.Weight,
             ItemId = sample.ItemID,
             Hue = sample.Hue,
-            Name = sample.Name ?? Localization.GetText(sample.LabelNumber) ?? type.Name,
+            Name = GetName(sample),
             Amount = amount
         };
 
@@ -533,14 +570,15 @@ public static class IdleSettlement
         for (var i = items.Count - 1; i >= 0 && CarriedWeight(pm) > report.PackLimit; i--)
         {
             var item = items[i];
-            if (!types.Contains(item.GetType()) || !bank.CheckHold(pm, item, false, true))
+            if (!types.Contains(item.GetType()) || !item.Stackable && !report.PlacedItems.Contains(item) ||
+                !bank.CheckHold(pm, item, false, true))
             {
                 continue;
             }
 
             var amount = item.Amount;
             var weight = item.PileWeight + item.TotalWeight;
-            var name = item.Name ?? Localization.GetText(item.LabelNumber) ?? item.GetType().Name;
+            var name = GetName(item);
 
             if (!bank.TryDropItem(pm, item, false))
             {
@@ -672,7 +710,7 @@ public static class IdleSettlement
     /// The container's own limits, plus, for anything the character carries, the character's weight limit, so offline
     /// gains never leave them overloaded. Staff skip container limits (as online) but not the carry limit.
     /// </summary>
-    private static bool Fits(Container container, PlayerMobile pm, Item item, int limit)
+    internal static bool Fits(Container container, PlayerMobile pm, Item item, int limit)
     {
         if (!container.CheckHold(pm, item, false, true))
         {
@@ -681,6 +719,8 @@ public static class IdleSettlement
 
         return container is BankBox || CarriedWeight(pm) + item.PileWeight + item.TotalWeight <= limit;
     }
+
+    public static string GetName(Item item) => item.Name ?? Localization.GetText(item.LabelNumber) ?? item.GetType().Name;
 
     private static Item Construct(Type type)
     {

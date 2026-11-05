@@ -40,6 +40,30 @@ public abstract class IdleTaskHandler
 
     /// <summary>Starts a settlement. The run reads supplies once and consumes them at the end.</summary>
     public abstract IdleTaskRun BeginRun(PlayerMobile pm, IdleTaskDefinition def, IdleTarget target);
+
+    /// <summary>Checks an order (what to make, how many). Tasks that take no order reject one.</summary>
+    public virtual bool ValidateOrder(PlayerMobile pm, IdleTaskDefinition def, IdleOrder order, out string error)
+    {
+        error = order == null ? null : "That task does not take an order.";
+        return order == null;
+    }
+
+    /// <summary>Supplies check for tasks whose needs depend on the order (materials for a recipe).</summary>
+    public virtual bool HasSupplies(PlayerMobile pm, IdleTaskDefinition def, IdleOrder order, out string error) =>
+        HasSupplies(pm, def, out error);
+
+    public virtual IdleTaskRun BeginRun(PlayerMobile pm, IdleTaskDefinition def, IdleTarget target, IdleOrder order) =>
+        BeginRun(pm, def, target);
+
+    /// <summary>
+    /// Checks the work station (forge, anvil) around where the character stands or logged out. Called with the
+    /// character's own position, so a handler may use the server's live check while the character is in the world.
+    /// </summary>
+    public virtual bool CheckStation(PlayerMobile pm, IdleTaskDefinition def, Map map, Point3D location, out string error)
+    {
+        error = null;
+        return true;
+    }
 }
 
 /// <summary>One settlement of a task. Lives only for the duration of a login.</summary>
@@ -61,6 +85,26 @@ public abstract class IdleTaskRun
     public virtual void Describe(List<string> notes)
     {
     }
+}
+
+/// <summary>
+/// A run that rolls every attempt with the real dice instead of expected values. Used where counts are small
+/// (bounded by materials) and each result is its own item, e.g. crafting with its quality and maker's mark.
+/// </summary>
+public abstract class IdleDiscreteTaskRun : IdleTaskRun
+{
+    public override int SuccessesAllowed => int.MaxValue;
+
+    public override void Evaluate(double skillBase, double skillValue, IdleAttemptModel model)
+    {
+    }
+
+    public override void ConsumeSupplies(int successes)
+    {
+    }
+
+    /// <summary>Works until the time, materials, tools, room, or order run out; sets the report's stop reason.</summary>
+    public abstract void Run(IdleDiscreteContext context);
 }
 
 /// <summary>
