@@ -156,6 +156,13 @@ public static class IdleApi
             ? IdleWorkHere.NearestSpots(map, location, taskId, max)
             : [];
 
+    /// <summary>
+    /// Walking routes to the task's known spots, nearest on foot first, with distance, time, teleporters, and how much
+    /// of the way is unguarded. From where the character is, or where it logged out. Changes nothing.
+    /// </summary>
+    public static IdleRoutesInfo Routes(PlayerMobile pm, string taskId, int max = 5) =>
+        IdleRouting.Find(pm, taskId, Math.Clamp(max, 1, 20));
+
     /// <summary>The Focus button: starts Focus for the character's task, online or offline.</summary>
     public static IdleFocusInfo ActivateFocus(PlayerMobile pm, out string message)
     {

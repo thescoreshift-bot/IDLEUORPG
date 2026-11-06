@@ -49,6 +49,7 @@ public class IdleSystem : GenericPersistence
     public static void Initialize()
     {
         LoadCatalog();
+        IdleRoutes.Load();
         EventSink.Logout += OnLogout;
         EventSink.Connected += OnConnected;
         EventSink.ServerStarted += IdleRecipes.Warm;

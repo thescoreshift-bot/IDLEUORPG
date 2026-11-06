@@ -16,13 +16,14 @@ public static class IdleCommands
         CommandSystem.Register("IdleApi", AccessLevel.GameMaster, IdleApi_OnCommand);
     }
 
-    [Usage("Idle [stop | status | resume | list | recipes [filter] | here <task> | near <task> [count] | check <task or order> | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]")]
+    [Usage("Idle [stop | status | resume | list | recipes [filter] | here <task> | near <task> [count] | check <task or order> | route <task or order> | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]")]
     [Description(
         "Choose the spot your character works while you are logged out. With no argument, target the spot. " +
         "smelt/craft start an order where you stand; 'at <location>' can be followed by the same order. " +
         "'here <task>' starts the task at the nearest target within reach or says where the nearest one is; " +
         "'here smelt <amount>' and 'here craft ...' do the same for orders. 'near <task>' lists the nearest known spots. " +
-        "'check <task>' (or 'check smelt <amount>', 'check craft ...') lists what is missing before going to work."
+        "'check <task>' (or 'check smelt <amount>', 'check craft ...') lists what is missing before going to work. " +
+        "'route <task>' lists the nearest spots on foot with walking distance and time."
     )]
     public static void Idle_OnCommand(CommandEventArgs e)
     {
@@ -75,6 +76,11 @@ public static class IdleCommands
                     SendPreflight(pm, e);
                     break;
                 }
+            case "route" when e.Length > 1:
+                {
+                    SendRoutes(pm, e);
+                    break;
+                }
             case "at" when e.Length > 1:
                 {
                     StartAt(pm, e);
@@ -110,7 +116,7 @@ public static class IdleCommands
             default:
                 {
                     pm.SendMessage(
-                        "Usage: [Idle [stop | status | resume | list | recipes [filter] | here <task> | near <task> [count] | check <task or order> | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]"
+                        "Usage: [Idle [stop | status | resume | list | recipes [filter] | here <task> | near <task> [count] | check <task or order> | route <task or order> | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]"
                     );
                     break;
                 }
@@ -350,6 +356,65 @@ public static class IdleCommands
                 pm.SendMessage(0x3B2, $"  OK - {line.Check}: {line.Message}");
             }
         }
+    }
+
+    private static void SendRoutes(PlayerMobile pm, CommandEventArgs e)
+    {
+        if (!TryResolveTask(pm, pm, e, 1, out var def, out _))
+        {
+            return;
+        }
+
+        var info = IdleRouting.Find(pm, def.Id);
+        if (info.Status != "Ok")
+        {
+            pm.SendMessage(0x22, info.Message);
+            return;
+        }
+
+        pm.SendMessage(0x3F, $"{def.Name}: nearest spots on foot (distances are estimates).");
+
+        var i = 0;
+        foreach (var r in info.Routes)
+        {
+            var s = r.Spot;
+            pm.SendMessage(
+                $"{++i}. {s.Name} ({s.Id}): {r.WalkTiles} tiles on foot ({s.Distance} straight {s.Direction}), " +
+                $"about {IdleRouting.FormatEta(r.EtaSeconds)}.{DescribeRoute(r)}"
+            );
+        }
+    }
+
+    /// <summary>" Guarded all the way.", " 120 tiles unguarded, 1 teleporter."</summary>
+    private static string DescribeRoute(IdleRouteInfo r)
+    {
+        using var sb = ValueStringBuilder.Create();
+
+        if (r.UnguardedTiles == 0)
+        {
+            sb.Append(" Guarded all the way");
+        }
+        else if (r.UnguardedTiles >= r.WalkTiles)
+        {
+            sb.Append(" Unguarded all the way");
+        }
+        else
+        {
+            sb.Append($" {r.UnguardedTiles} tiles unguarded");
+        }
+
+        if (r.Teleports > 0)
+        {
+            sb.Append($", {r.Teleports} teleporter{(r.Teleports == 1 ? "" : "s")}");
+        }
+
+        if (r.Spot.HostileSpawners > 0)
+        {
+            sb.Append($", {r.Spot.HostileSpawners} hostile spawner(s) at the spot");
+        }
+
+        sb.Append('.');
+        return sb.ToString();
     }
 
     private static void SendTaskNames(Mobile m)
@@ -723,17 +788,17 @@ public static class IdleCommands
         }
     }
 
-    [Usage("IdleApi <status | checkin> <character name> | near <character name> <task> [count] | here <character name> <task> | check <character name> <task or order>")]
+    [Usage("IdleApi <status | checkin> <character name> | near <character name> <task> [count] | here <character name> <task> | check <character name> <task or order> | route <character name> <task or order>")]
     [Description(
         "Shows exactly what a phone or web client would get for a character with an idle task, online or offline. " +
         "'checkin' settles the offline time since the character left or was last checked. 'near' and 'here' are the " +
         "spot lookup and work-here calls, from where the character is or logged out ('here' really starts the task). " +
-        "'check' is the preflight checklist."
+        "'check' is the preflight checklist; 'route' the walking routes to the nearest spots."
     )]
     public static void IdleApi_OnCommand(CommandEventArgs e)
     {
         const string usage =
-            "Usage: [IdleApi <status | checkin> <character name> | near <character name> <task> [count] | here <character name> <task> | check <character name> <task or order>";
+            "Usage: [IdleApi <status | checkin> <character name> | near <character name> <task> [count] | here <character name> <task> | check <character name> <task or order> | route <character name> <task or order>";
 
         if (e.Length < 2)
         {
@@ -742,7 +807,7 @@ public static class IdleCommands
         }
 
         var verb = e.GetString(0).ToLowerInvariant();
-        var spotCall = verb is "near" or "here" or "check";
+        var spotCall = verb is "near" or "here" or "check" or "route";
         var pm = spotCall ? FindPlayer(e.GetString(1)) : IdleSystem.FindPlayerWithTask(e.GetString(1));
 
         if (pm == null)
@@ -774,6 +839,11 @@ public static class IdleCommands
             case "check":
                 {
                     result = IdleApi.Preflight(pm, task.Id, order);
+                    break;
+                }
+            case "route":
+                {
+                    result = IdleApi.Routes(pm, task.Id);
                     break;
                 }
             case "status":

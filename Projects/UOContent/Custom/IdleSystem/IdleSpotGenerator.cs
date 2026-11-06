@@ -96,8 +96,8 @@ public sealed class IdleSpotGenerator
 
     [Usage("IdleGenSpots [dry] [noreach] | status | stop")]
     [Description(
-        "Scans Felucca for idle work spots and writes Data/Idle/spots.generated.json. 'dry' scans without writing; " +
-        "'noreach' skips the walkability pass. Restart the server afterwards to load the spots and free the tile cache."
+        "Scans Felucca for idle work spots and writes Data/Idle/spots.generated.json, plus the walking route map " +
+        "(Data/Idle/routes.felucca.bin). 'dry' scans without writing; 'noreach' skips the walkability pass and the route map. Restart the server afterwards to load the spots and free the tile cache."
     )]
     private static void OnCommand(CommandEventArgs e) => Dispatch(e.Mobile, e.Arguments);
 
@@ -791,7 +791,27 @@ public sealed class IdleSpotGenerator
         }
 
         EndPhase($"{_reach.Visited:N0} walkable positions reached");
+
+        if (_reach.Routes == null)
+        {
+            yield break;
+        }
+
+        BeginPhase("Building the route map");
+
+        var stamps = new List<IdleMapFileStamp>();
+        IdleMapFileStamp.Collect(_map, stamps);
+
+        foreach (var step in _reach.Routes.Build(_reach.Floor, stamps))
+        {
+            yield return step;
+        }
+
+        _routeMap = _reach.Routes.Result;
+        EndPhase($"{_routeMap.NodeCount:N0} areas, {_routeMap.EdgeCount:N0} links");
     }
+
+    private IdleRouteMap _routeMap;
 
     private IEnumerable<bool> TagAndValidate()
     {
@@ -923,7 +943,7 @@ public sealed class IdleSpotGenerator
         }
 
         spot.Region = name;
-        spot.RegionKind = KindOf(region);
+        spot.RegionKind = IdleRegions.KindOf(region);
         spot.HostileSpawners = CountHostileSpawners(stand);
         spot.Reachable = _reach?.IsReached(stand);
 
@@ -1019,21 +1039,6 @@ public sealed class IdleSpotGenerator
         }
 
         return false;
-    }
-
-    private static string KindOf(Region region)
-    {
-        if (region.GetRegion<TownRegion>() is { } town)
-        {
-            return town.IsDisabled() ? "UnguardedTown" : "Town";
-        }
-
-        if (region.GetRegion<GuardedRegion>() is { } guarded && !guarded.IsDisabled())
-        {
-            return "Guarded";
-        }
-
-        return region.IsPartOf<DungeonRegion>() ? "Dungeon" : "Wilderness";
     }
 
     private int CountHostileSpawners(Point3D p)
@@ -1156,6 +1161,13 @@ public sealed class IdleSpotGenerator
         Directory.CreateDirectory(Path.GetDirectoryName(IdleSpotLoader.GeneratedPath)!);
         File.WriteAllText(IdleSpotLoader.GeneratedPath, JsonSerializer.Serialize(file, options));
 
+        if (_routeMap != null)
+        {
+            var routePath = IdleRoutes.PathFor(_map);
+            _routeMap.Write(routePath);
+            Report($"Wrote the route map ({new FileInfo(routePath).Length / 1024:N0} KB) to Data/Idle/{Path.GetFileName(routePath)}.");
+        }
+
         Report(
             $"Wrote {file.Spots.Count:N0} spots ({new FileInfo(IdleSpotLoader.GeneratedPath).Length / 1024:N0} KB) to " +
             $"Data/Idle/spots.generated.json. {summary} Restart to load them and free the tile cache."
@@ -1165,7 +1177,7 @@ public sealed class IdleSpotGenerator
     /// <summary>
     /// Flood fill over walkable positions with the server's own movement check, seeded at the starting cities and
     /// moongates and following teleporters. Positions are keyed by tile; a second floor over a visited tile is tracked
-    /// separately so upper levels of buildings and caves are not lost.
+    /// separately so upper levels of buildings and caves are not lost. Every step also feeds the route map.
     /// </summary>
     private sealed class ReachMap
     {
@@ -1181,12 +1193,17 @@ public sealed class IdleSpotGenerator
         private readonly int _width;
         private readonly int _height;
         private readonly byte[] _floor;
-        private readonly HashSet<long> _upperFloors = [];
+        private readonly Dictionary<long, int> _upperFloors = [];
         private readonly Queue<long> _queue = new();
         private readonly Dictionary<int, List<Point3D>> _teleports = [];
         private readonly IdleReachProbe _probe = new();
 
         public long Visited { get; private set; }
+
+        /// <summary>The route map collected during the walk; null for maps too large to pack a position in 25 bits.</summary>
+        public IdleRouteBuilder Routes { get; }
+
+        public byte[] Floor => _floor;
 
         public ReachMap(Map map)
         {
@@ -1194,6 +1211,7 @@ public sealed class IdleSpotGenerator
             _width = map.Width;
             _height = map.Height;
             _floor = new byte[_width * _height];
+            Routes = (long)_width * _height < 1L << 25 ? new IdleRouteBuilder(map) : null;
         }
 
         public void SeedFromTravel()
@@ -1203,7 +1221,7 @@ public sealed class IdleSpotGenerator
             {
                 if (city.Map == _map)
                 {
-                    Visit(city.Location.X, city.Location.Y, city.Location.Z);
+                    Visit(city.Location.X, city.Location.Y, city.Location.Z, -1, default, false);
                 }
             }
 
@@ -1216,7 +1234,7 @@ public sealed class IdleSpotGenerator
 
                 foreach (var entry in list.Entries)
                 {
-                    Visit(entry.Location.X, entry.Location.Y, entry.Location.Z);
+                    Visit(entry.Location.X, entry.Location.Y, entry.Location.Z, -1, default, false);
                 }
             }
         }
@@ -1266,7 +1284,11 @@ public sealed class IdleSpotGenerator
 
         private bool InBounds(int x, int y) => x >= 0 && y >= 0 && x < _width && y < _height;
 
-        private void Visit(int x, int y, int z)
+        /// <summary>
+        /// Marks a position reached from <paramref name="from"/> (area <paramref name="fromNode"/>, -1 for a starting
+        /// point) and queues it if it is new; either way the route map learns the step.
+        /// </summary>
+        private void Visit(int x, int y, int z, int fromNode, Point3D from, bool teleport)
         {
             if (!InBounds(x, y))
             {
@@ -1275,18 +1297,35 @@ public sealed class IdleSpotGenerator
 
             var index = y * _width + x;
             var floor = _floor[index];
+            int node;
 
             if (floor == Unseen)
             {
                 _floor[index] = (byte)(Math.Clamp(z, -127, 127) + 128);
+                node = Routes?.Claim(x, y, z, fromNode, from, teleport) ?? 0;
+                Routes?.SetGround(index, node);
             }
-            else if (Math.Abs(floor - 128 - z) <= SameFloor || !_upperFloors.Add(UpperKey(index, z)))
+            else if (Math.Abs(floor - 128 - z) <= SameFloor)
             {
+                Routes?.Link(fromNode, Routes.GroundNode(index, x, y), from, new Point3D(x, y, z), teleport);
                 return;
             }
+            else
+            {
+                var key = UpperKey(index, z);
+                if (_upperFloors.TryGetValue(key, out var existing))
+                {
+                    Routes?.Link(fromNode, existing, from, new Point3D(x, y, z), teleport);
+                    return;
+                }
 
+                node = Routes?.Claim(x, y, z, fromNode, from, teleport) ?? 0;
+                _upperFloors[key] = node;
+            }
+
+            Routes?.Add(node, x, y, z);
             Visited++;
-            _queue.Enqueue(((long)index << 8) | (byte)(sbyte)Math.Clamp(z, -128, 127));
+            _queue.Enqueue(((long)node << 33) | ((long)index << 8) | (byte)(sbyte)Math.Clamp(z, -128, 127));
         }
 
         private static long UpperKey(int index, int z) => ((long)index << 5) | (uint)((z + 128) >> 3);
@@ -1297,7 +1336,8 @@ public sealed class IdleSpotGenerator
             for (var n = 0; n < nodes && _queue.Count > 0; n++)
             {
                 var packed = _queue.Dequeue();
-                var index = (int)(packed >> 8);
+                var node = (int)(packed >> 33);
+                var index = (int)((packed >> 8) & 0x1FFFFFF);
                 var z = (sbyte)(byte)(packed & 0xFF);
                 var x = index % _width;
                 var y = index / _width;
@@ -1310,7 +1350,7 @@ public sealed class IdleSpotGenerator
                         var nx = x;
                         var ny = y;
                         MovementRules.Offset(d, ref nx, ref ny);
-                        Visit(nx, ny, newZ);
+                        Visit(nx, ny, newZ, node, loc, false);
                     }
                 }
 
@@ -1318,7 +1358,7 @@ public sealed class IdleSpotGenerator
                 {
                     foreach (var dst in destinations)
                     {
-                        Visit(dst.X, dst.Y, dst.Z);
+                        Visit(dst.X, dst.Y, dst.Z, node, loc, true);
                     }
                 }
             }
@@ -1348,7 +1388,7 @@ public sealed class IdleSpotGenerator
 
             for (var z = p.Z - 16; z <= p.Z + 16; z += 8)
             {
-                if (_upperFloors.Contains(UpperKey(index, z)))
+                if (_upperFloors.ContainsKey(UpperKey(index, z)))
                 {
                     return true;
                 }
