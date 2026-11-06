@@ -226,6 +226,23 @@ public static class StaminaSystem
         return ref stepsTaken;
     }
 
+    /// <summary>
+    /// Steps <paramref name="m"/> has used of its <see cref="IHasSteps.StepsMax"/>, less what it has regained resting
+    /// since its last step. Read-only: changes no counters.
+    /// </summary>
+    public static int PeekStepsTaken(IHasSteps m)
+    {
+        ref var stepsTaken = ref GetStepsTaken(m, out var exists);
+        if (!exists)
+        {
+            return 0;
+        }
+
+        var entity = stepsTaken.Entity;
+        var stepsGained = (int)((Core.Now - stepsTaken.IdleStartTime) / entity.IdleTimePerStepsGain * entity.StepsGainedPerIdleTime);
+        return Math.Max(0, stepsTaken.Steps - stepsGained);
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool RegenSteps(IHasSteps m, int amount = 0, bool removeOnInvalidation = true)
     {

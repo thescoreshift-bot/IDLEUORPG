@@ -78,6 +78,24 @@ public class IdleTravelSettings
 
     /// <summary>The walk stops when the character has not moved for this long.</summary>
     public double StuckSeconds { get; set; } = 20;
+
+    /// <summary>
+    /// Runs while stamina allows, walks below <see cref="WalkBelowPercent"/> and runs again from
+    /// <see cref="RunAbovePercent"/>. Never runs overloaded or hidden.
+    /// </summary>
+    public bool Run { get; set; } = true;
+
+    public double RunAbovePercent { get; set; } = 30;
+
+    /// <summary>Kept above the 10% where every running step costs an extra point of stamina.</summary>
+    public double WalkBelowPercent { get; set; } = 15;
+
+    /// <summary>Mounted, the mount's step budget decides instead of the rider's stamina.</summary>
+    public bool RunWhenMounted { get; set; } = true;
+
+    public double MountRunAbovePercent { get; set; } = 30;
+
+    public double MountWalkBelowPercent { get; set; } = 10;
 }
 
 /// <summary>[IdleGenSpots: how the world scan picks spots.</summary>

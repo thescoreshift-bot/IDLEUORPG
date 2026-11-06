@@ -15,16 +15,7 @@ namespace Server.Custom.Idle;
 /// </summary>
 public sealed record IdleRoute(
     int Tiles, int Teleports, int UnguardedTiles, IReadOnlyList<Point3D> Waypoints, IReadOnlyList<int> TeleportLegs
-)
-{
-    /// <summary>
-    /// A walking step every 400 ms (the client's walk pace), plus about 10% for turning and doors, and a second per
-    /// teleporter.
-    /// </summary>
-    public const double SecondsPerTile = 0.45;
-
-    public double EtaSeconds => Tiles * SecondsPerTile + Teleports;
-}
+);
 
 public static class IdleRegions
 {

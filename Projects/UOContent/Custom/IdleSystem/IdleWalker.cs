@@ -12,11 +12,12 @@ namespace Server.Custom.Idle;
 
 /// <summary>
 /// "Go and work": walks a character in the world to the spot <see cref="IdleRouting.Pick"/> chose and starts the task
-/// there. The client walks its own character: the server sends one 0x97 (move player) step and sends the next only
-/// once the character's position shows the step was taken, so client and server never disagree about where the
-/// character is. A step the client does not take after <see cref="IdleTravelSettings.StepTries"/> asks is made by the
-/// server instead (checked like a normal step, then sent to the client and to everyone around). The walk follows the
-/// route map's waypoints and finds the steps between them with the server's pathfinder.
+/// there. The client walks its own character, running while stamina allows (<see cref="IdlePace"/>): the server sends
+/// one 0x97 (move player) step and sends the next only once the character's position shows the step was taken and the
+/// step's own delay has passed, so client and server never disagree about where the character is. A step the client
+/// does not take after <see cref="IdleTravelSettings.StepTries"/> asks is made by the server instead, at walking pace
+/// (checked like a normal step, then sent to the client and to everyone around). The walk follows the route map's
+/// waypoints and finds the steps between them with the server's pathfinder.
 /// </summary>
 public static class IdleWalker
 {
@@ -76,7 +77,15 @@ public static class IdleWalker
             $"You set off for {spot.Name} ({spot.Id}): {pick.Pick.WalkTiles} tiles, about " +
             $"{IdleRouting.FormatEta(pick.Pick.EtaSeconds)}. {pick.Message}"
         );
-        pm.SendMessage(0x3B2, "Moving by hand, fighting, or [Idle stop ends the walk.");
+        var pace = IdlePace.For(pm);
+        if (pace.CanRun)
+        {
+            pm.SendMessage(0x3B2, "You run while your stamina allows. Moving by hand, fighting, or [Idle stop ends the walk.");
+        }
+        else
+        {
+            pm.SendMessage(0x3B2, $"You walk ({pace.WalkReason}). Moving by hand, fighting, or [Idle stop ends the walk.");
+        }
 
         walk.Start();
         return true;
@@ -101,7 +110,16 @@ public static class IdleWalker
     {
         // Only real steps raise the event (turns do not), before the step is applied. The walker's own step has the
         // direction it asked for; any other step is the player's.
-        if (e.Mobile is PlayerMobile pm && _walks.TryGetValue(pm, out var walk) && !walk.Expects(e.Direction))
+        if (e.Mobile is not PlayerMobile pm || !_walks.TryGetValue(pm, out var walk))
+        {
+            return;
+        }
+
+        if (walk.Expects(e.Direction))
+        {
+            walk.Saw(e.Direction);
+        }
+        else
         {
             walk.Finish("You moved by hand, so the walk stopped.", 0x22);
         }
@@ -124,10 +142,8 @@ public static class IdleWalker
 
     private sealed class Walk : Timer
     {
-        private const int TickMs = 50;
-
-        // Sent a little after the client's own walk delay has passed, so it never refuses a step for being early.
-        private const int PaceMarginMs = 25;
+        // Fine enough that a 200 ms running step is not stretched much by waiting for the next check.
+        private const int TickMs = 25;
 
         // How long a teleporter may take to move the character once it stands on it.
         private const int TeleportWaitMs = 3000;
@@ -142,6 +158,7 @@ public static class IdleWalker
         private readonly Map _map;
         private readonly long _started;
         private readonly double _limitMs;
+        private readonly double _etaSeconds;
         private readonly int _stepTimeoutMs;
         private readonly int _stepTries;
         private readonly int _stuckMs;
@@ -160,6 +177,15 @@ public static class IdleWalker
         private Direction _facingAtSend;
         private long _sentAt;
         private int _tries;
+
+        // Run or walk: the hysteresis state, the kind and delay of the step last asked for, and whether the server saw
+        // the last confirmed step as running (the client can ignore the run flag, or run when asked to walk).
+        private bool _running;
+        private bool _sentRun;
+        private int _lastStepDelayMs;
+        private bool _sawRun;
+        private bool _ranUnasked;
+        private bool _toldAlwaysRun;
 
         private Point3D _lastKnown;
         private long _lastProgress;
@@ -192,8 +218,11 @@ public static class IdleWalker
             _stepTries = Math.Clamp(travel.StepTries, 1, 10);
             _stuckMs = (int)(Math.Clamp(travel.StuckSeconds, 3, 300) * 1000);
 
-            // Twice the estimate plus a minute: past that something is wrong even if steps still trickle in.
-            _limitMs = (pick.Pick.EtaSeconds * 2 + 60) * 1000;
+            // Twice the walking-only time plus a minute: past that something is wrong even if steps still trickle in.
+            // Walking-only, so a client that walks when asked to run, or rests on the way, never trips it.
+            var walkOnly = IdlePace.EstimateSeconds(pick.Pick.WalkTiles, pick.Pick.Teleports, IdlePace.For(pm), false);
+            _limitMs = (walkOnly * 2 + 60) * 1000;
+            _etaSeconds = pick.Pick.EtaSeconds;
 
             _started = Core.TickCount;
             _lastProgress = _started;
@@ -219,22 +248,67 @@ public static class IdleWalker
 
         public bool Expects(Direction d) => _pending is { } pending && (d & Direction.Mask) == pending;
 
-        private int StepDelayMs => (_pm.Mounted ? MovementRules.WalkMountDelay : MovementRules.WalkFootDelay) + PaceMarginMs;
+        /// <summary>The server is applying the step the walker asked for; notes whether it is a running step.</summary>
+        public void Saw(Direction d)
+        {
+            _sawRun = (d & Direction.Running) != 0;
+            _ranUnasked |= _sawRun && !_sentRun;
+        }
 
         public string Describe()
         {
-            var left = RemainingTiles();
-            return $"Walking to {_spot.Name} ({_spot.Id}): about {left} tiles to go, " +
-                   $"{IdleRouting.FormatEta(left * IdleRoute.SecondsPerTile)}. {_steps} steps taken.";
+            var left = RemainingTiles(out var teleports);
+            var pace = IdlePace.For(_pm);
+            var eta = IdlePace.EstimateSeconds(left, teleports, pace, true, _running);
+
+            using var sb = ValueStringBuilder.Create();
+            sb.Append($"Going to {_spot.Name} ({_spot.Id}): about {left} tiles to go, {IdleRouting.FormatEta(eta)}. ");
+
+            if (_running && _sawRun)
+            {
+                sb.Append("Running.");
+            }
+            else if (_running)
+            {
+                // Asked to run, but the server saw a walking step (or none yet).
+                sb.Append(_steps == 0 ? "Setting off at a run." : "Walking: your client did not run when asked.");
+            }
+            else if (_sawRun)
+            {
+                sb.Append($"Asked to walk, but your client is running (Always Run?). {Level(pace)}");
+            }
+            else if (pace.WalkReason != null)
+            {
+                sb.Append($"Walking ({pace.WalkReason}).");
+            }
+            else
+            {
+                sb.Append($"Walking to rest. {Level(pace)} Running again from {Percent(pace.RunAbove, pace.Max)}%.");
+            }
+
+            sb.Append($" {_steps} steps taken.");
+            return sb.ToString();
         }
 
-        private int RemainingTiles()
+        private string Level(IdlePaceState pace) =>
+            pace.MountCarriesCost
+                ? $"Your mount has {Percent(pace.Level, pace.Max)}% of its strength."
+                : $"Stamina {_pm.Stam}/{_pm.StamMax}.";
+
+        private static int Percent(double value, int max) => (int)Math.Round(value * 100 / Math.Max(1, max));
+
+        private int RemainingTiles(out int teleports)
         {
             var tiles = 0;
+            teleports = 0;
             var last = _pm.Location;
             for (var i = _next; i < _waypoints.Count; i++)
             {
-                if (!_teleportLegs.Contains(i - 1))
+                if (_teleportLegs.Contains(i - 1))
+                {
+                    teleports++;
+                }
+                else
                 {
                     tiles += IdleRouteMap.Steps(last, _waypoints[i]);
                 }
@@ -243,6 +317,14 @@ public static class IdleWalker
             }
 
             return tiles;
+        }
+
+        /// <summary>Whether the next step runs: the pace rules with this walk's hysteresis state.</summary>
+        private bool WantRun()
+        {
+            var pace = IdlePace.For(_pm);
+            _running = pace.CanRun && IdlePace.Decide(_running, pace.Level, pace.WalkBelow, pace.RunAbove);
+            return _running;
         }
 
         protected override void OnTick()
@@ -289,7 +371,14 @@ public static class IdleWalker
                 return;
             }
 
-            if (now - _sentAt < StepDelayMs || _pm.Frozen || _pm.Paralyzed)
+            if (now - _sentAt < _lastStepDelayMs + IdlePace.MarginMs || _pm.Frozen || _pm.Paralyzed)
+            {
+                return;
+            }
+
+            // Switching from running to walking, the client wants the longer of the two delays before the next step.
+            var run = WantRun();
+            if (now - _sentAt < Math.Max(_lastStepDelayMs, IdlePace.DelayMs(_pm.Mounted, run)) + IdlePace.MarginMs)
             {
                 return;
             }
@@ -305,7 +394,7 @@ public static class IdleWalker
                 return;
             }
 
-            TakeStep(_path[_pathIndex], now);
+            TakeStep(_path[_pathIndex], run, now);
         }
 
         /// <summary>The shared character rules, then the walk's own time limits.</summary>
@@ -370,24 +459,48 @@ public static class IdleWalker
             // The client turns first when it faces another way; it then needs a second request for the step itself.
             if ((_pm.Direction & Direction.Mask) == pending && _facingAtSend != pending)
             {
-                if (now - _sentAt >= StepDelayMs)
+                if (now - _sentAt >= _lastStepDelayMs + IdlePace.MarginMs)
                 {
                     _facingAtSend = pending;
-                    Send(pending, now);
+                    Send(pending, _sentRun, now);
                 }
 
                 return false;
             }
 
-            if (now - _sentAt < _stepTimeoutMs || _pm.Frozen || _pm.Paralyzed)
-            {
-                return false;
-            }
+            // The client ran when asked to walk (Always Run) and the server refused the run for lack of stamina: asking
+            // again only repeats that, so the server takes the step at walking pace.
+            var refusedRun = _ranUnasked && _pm.Stam <= 0;
 
-            if (++_tries < _stepTries)
+            if (refusedRun)
             {
-                Send(pending, now);
-                return false;
+                if (now - _sentAt < IdlePace.DelayMs(_pm.Mounted, false) + IdlePace.MarginMs)
+                {
+                    return false;
+                }
+
+                if (!_toldAlwaysRun)
+                {
+                    _toldAlwaysRun = true;
+                    _pm.SendMessage(
+                        0x3B2,
+                        "Your client keeps running while you are out of stamina (Always Run?). The walk carries on at " +
+                        "walking pace; turn Always Run off to let your client walk."
+                    );
+                }
+            }
+            else
+            {
+                if (now - _sentAt < _stepTimeoutMs || _pm.Frozen || _pm.Paralyzed)
+                {
+                    return false;
+                }
+
+                if (++_tries < _stepTries)
+                {
+                    Send(pending, _sentRun, now);
+                    return false;
+                }
             }
 
             // The client did not take the step: the server takes it, if it is a legal step.
@@ -508,7 +621,7 @@ public static class IdleWalker
             return true;
         }
 
-        private void TakeStep(Direction d, long now)
+        private void TakeStep(Direction d, bool run, long now)
         {
             int nx = _pm.X, ny = _pm.Y;
             MovementRules.Offset(d, ref nx, ref ny);
@@ -517,7 +630,7 @@ public static class IdleWalker
             {
                 if (SplitDiagonal(d))
                 {
-                    TakeStep(_path[_pathIndex], now);
+                    TakeStep(_path[_pathIndex], run, now);
                     return;
                 }
 
@@ -538,7 +651,7 @@ public static class IdleWalker
             _pendingTo = new Point3D(nx, ny, _pm.Z);
             _facingAtSend = _pm.Direction & Direction.Mask;
             _tries = 0;
-            Send(d, now);
+            Send(d, run, now);
         }
 
         private bool OpenDoor(int x, int y)
@@ -639,10 +752,16 @@ public static class IdleWalker
             return false;
         }
 
-        private void Send(Direction d, long now)
+        /// <summary>Asks the client for one step; the 0x80 bit of the direction makes it a running step.</summary>
+        private void Send(Direction d, bool run, long now)
         {
             _sentAt = now;
-            Span<byte> packet = [0x97, (byte)(d & Direction.Mask)];
+            _sentRun = run;
+            _ranUnasked = false;
+            _lastStepDelayMs = IdlePace.DelayMs(_pm.Mounted, run);
+
+            var dir = (byte)(d & Direction.Mask);
+            Span<byte> packet = [0x97, run ? (byte)(dir | (byte)Direction.Running) : dir];
             _pm.NetState?.Send(packet);
         }
 
@@ -714,7 +833,8 @@ public static class IdleWalker
             _pm.SendMessage(hue, reason);
 
             using var sb = ValueStringBuilder.Create();
-            sb.Append($"Walked {_steps} steps in {IdleRouting.FormatEta((Core.TickCount - _started) / 1000.0)}");
+            var took = (Core.TickCount - _started) / 1000.0;
+            sb.Append($"Walked {_steps} steps in {IdleRouting.FormatEta(took)} (estimate {IdleRouting.FormatEta(_etaSeconds)})");
             if (_doors > 0)
             {
                 sb.Append($", opened {_doors} door(s)");

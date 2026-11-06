@@ -8,6 +8,7 @@ namespace Server.Custom.Idle;
 public record IdleRouteInfo(
     IdleSpotInfo Spot,
     int WalkTiles,
+    // For this character as it is now: running while its stamina (or its mount) allows. See IdlePace.
     double EtaSeconds,
     int Teleports,
     // Tiles of the route outside guard protection.
@@ -95,6 +96,7 @@ public static class IdleRouting
         // half the map when a task has few spots.
         var routes = routeMap.FindRoutes(from, goals, 0, 2);
         var found = new List<IdleRouteInfo>();
+        var pace = IdlePace.For(pm);
 
         for (var i = 0; i < routes.Length; i++)
         {
@@ -112,7 +114,8 @@ public static class IdleRouting
             var spot = IdleWorkHere.ToInfo(nearest[i].Location, nearest[i].Distance, from);
             found.Add(
                 new IdleRouteInfo(
-                    spot, route.Tiles, route.EtaSeconds, route.Teleports, route.UnguardedTiles,
+                    spot, route.Tiles, IdlePace.EstimateSeconds(route.Tiles, route.Teleports, pace), route.Teleports,
+                    route.UnguardedTiles,
                     _risks[RiskOf(spot, goals[i], map, route.UnguardedTiles)], waypoints, route.TeleportLegs
                 )
             );
