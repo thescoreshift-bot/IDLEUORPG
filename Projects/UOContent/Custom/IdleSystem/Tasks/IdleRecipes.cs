@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using Server.Engines.Craft;
+using Server.Logging;
 
 namespace Server.Custom.Idle;
 
@@ -34,7 +35,35 @@ public record IdleRecipe(
 /// </summary>
 public static class IdleRecipes
 {
+    private static readonly ILogger logger = LogFactory.GetLogger(typeof(IdleRecipes));
+
     private static readonly Dictionary<CraftSystem, List<IdleRecipe>> _cache = new();
+
+    /// <summary>
+    /// Reads every craft task's recipe list once at startup. The first read walks the whole craft table and its names
+    /// (about half a second for blacksmithing), which would otherwise stall the loop on the first player's check.
+    /// </summary>
+    public static void Warm()
+    {
+        var start = System.Diagnostics.Stopwatch.GetTimestamp();
+        var recipes = 0;
+
+        foreach (var def in IdleSystem.Tasks.Values)
+        {
+            if (def.Kind.InsensitiveEquals("Craft"))
+            {
+                recipes += GetRecipes(FindSystem(def.CraftSystem)).Count;
+            }
+        }
+
+        if (recipes > 0)
+        {
+            logger.Information(
+                "Idle recipes: {Count} read in {Ms:0} ms",
+                recipes, System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds
+            );
+        }
+    }
 
     /// <summary>The craft system behind a name like "Blacksmithy" (class DefBlacksmithy), or null.</summary>
     public static CraftSystem FindSystem(string name)
