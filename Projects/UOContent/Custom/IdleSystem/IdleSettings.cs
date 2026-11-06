@@ -54,6 +54,18 @@ public class IdleSettings
 
     /// <summary>"Work here" ([Idle here, IdleApi.WorkHere): how far around the character to look for a target (max 24).</summary>
     public int WorkHereRadius { get; set; } = 12;
+
+    public IdleTravelSettings Travel { get; set; } = new();
+}
+
+/// <summary>Going to a spot on foot ([Idle route, and the walker).</summary>
+public class IdleTravelSettings
+{
+    /// <summary>
+    /// Extra tiles on foot worth walking for a safer spot: one inside guard zones, without hostile spawners nearby, or
+    /// reached through fewer unguarded tiles. 0 = always the nearest on foot.
+    /// </summary>
+    public int SafeDetourTiles { get; set; } = 40;
 }
 
 /// <summary>[IdleGenSpots: how the world scan picks spots.</summary>

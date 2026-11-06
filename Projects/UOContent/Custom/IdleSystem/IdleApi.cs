@@ -163,6 +163,13 @@ public static class IdleApi
     public static IdleRoutesInfo Routes(PlayerMobile pm, string taskId, int max = 5) =>
         IdleRouting.Find(pm, taskId, Math.Clamp(max, 1, 20));
 
+    /// <summary>
+    /// The spot the character would walk to for a task (the nearest on foot, or a safer one a little farther), why it
+    /// was picked, and up to <paramref name="alternatives"/> other spots. Changes nothing.
+    /// </summary>
+    public static IdleSpotPickInfo PickSpot(PlayerMobile pm, string taskId, int alternatives = 4) =>
+        IdleRouting.Pick(pm, taskId, Math.Clamp(alternatives, 0, 19));
+
     /// <summary>The Focus button: starts Focus for the character's task, online or offline.</summary>
     public static IdleFocusInfo ActivateFocus(PlayerMobile pm, out string message)
     {
