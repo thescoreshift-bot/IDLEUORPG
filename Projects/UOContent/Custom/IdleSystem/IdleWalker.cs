@@ -22,6 +22,9 @@ namespace Server.Custom.Idle;
 public static class IdleWalker
 {
     private static readonly Dictionary<PlayerMobile, Walk> _walks = new();
+
+    // Each character's latest go, kept after the walk ends so a client can see how it ended. Not saved.
+    private static readonly Dictionary<PlayerMobile, IdleTravelRecord> _records = new();
     private static IdleReachProbe _probe;
 
     // A walker that is not alive passes closed doors, which the walk opens as it reaches them. As a player it keeps to
@@ -44,7 +47,18 @@ public static class IdleWalker
     public static bool TryGo(PlayerMobile pm, string taskId, IdleOrder order, out List<string> problems)
     {
         problems = [];
-        Stop(pm, null);
+        if (pm == null)
+        {
+            return false;
+        }
+
+        if (_walks.TryGetValue(pm, out var old))
+        {
+            old.Finish("Replaced", "You set off somewhere else.", 0, false);
+        }
+
+        var record = new IdleTravelRecord { TaskId = IdleSystem.GetTask(taskId)?.Id ?? taskId, Order = order };
+        _records[pm] = record;
 
         var check = IdlePreflight.Run(pm, taskId, order);
         if (!check.Ready)
@@ -57,18 +71,27 @@ public static class IdleWalker
                 }
             }
 
+            record.Stopped("NotReady", string.Join(" ", problems));
             return false;
         }
 
         var def = IdleSystem.GetTask(taskId);
-        var pick = IdleRouting.Pick(pm, def.Id, 0);
+        var pick = IdleRouting.Pick(pm, def.Id);
         if (pick.Status != "Ok")
         {
             problems.Add(pick.Message);
+            record.Stopped(pick.Status, pick.Message);
             return false;
         }
 
-        var walk = new Walk(pm, def, order, pick);
+        record.Phase = "Walking";
+        record.Message = pick.Message;
+        record.Route = pick.Pick;
+        record.Alternatives = pick.Alternatives;
+        record.PickReason = pick.Reason;
+        record.UpdatedAt = Core.Now;
+
+        var walk = new Walk(pm, def, order, pick, record);
         _walks[pm] = walk;
 
         var spot = pick.Pick.Spot;
@@ -91,20 +114,38 @@ public static class IdleWalker
         return true;
     }
 
-    /// <summary>Stops the walk. With a reason, the player is told why and where the walk ended.</summary>
-    public static bool Stop(PlayerMobile pm, string reason)
+    /// <summary>The player stops the walk ([Idle stop or a client's stop button); they are told where it ended.</summary>
+    public static bool Stop(PlayerMobile pm, string message)
     {
         if (pm == null || !_walks.TryGetValue(pm, out var walk))
         {
             return false;
         }
 
-        walk.Finish(reason, 0x22);
+        walk.Finish("StoppedByPlayer", message ?? "You stop walking.", 0x22);
         return true;
     }
 
     /// <summary>One line on the walk in progress, or null when the character is not walking.</summary>
     public static string Describe(PlayerMobile pm) => pm != null && _walks.TryGetValue(pm, out var walk) ? walk.Describe() : null;
+
+    internal static IdleTravelRecord GetRecord(PlayerMobile pm) =>
+        pm != null && _records.TryGetValue(pm, out var record) ? record : null;
+
+    /// <summary>The live part of the status, while walking.</summary>
+    internal static IdleTravelLive? GetLive(PlayerMobile pm) =>
+        pm != null && _walks.TryGetValue(pm, out var walk) ? walk.Live() : null;
+
+    /// <summary>For a deleted character: ends any walk and drops its record.</summary>
+    public static void Forget(PlayerMobile pm)
+    {
+        if (pm != null && _walks.TryGetValue(pm, out var walk))
+        {
+            walk.Finish("LoggedOut", null, 0, false);
+        }
+
+        _records.Remove(pm);
+    }
 
     private static void OnMovement(MovementEventArgs e)
     {
@@ -121,7 +162,7 @@ public static class IdleWalker
         }
         else
         {
-            walk.Finish("You moved by hand, so the walk stopped.", 0x22);
+            walk.Finish("MovedByHand", "You moved by hand, so the walk stopped.", 0x22);
         }
     }
 
@@ -129,7 +170,7 @@ public static class IdleWalker
     {
         if (m is PlayerMobile pm && _walks.TryGetValue(pm, out var walk))
         {
-            walk.Finish(null, 0);
+            walk.Finish("LoggedOut", "You logged out, so the walk stopped.", 0, false);
         }
     }
 
@@ -201,11 +242,13 @@ public static class IdleWalker
         private int _steps;
         private int _serverSteps;
         private int _doors;
+        private readonly IdleTravelRecord _record;
 
-        public Walk(PlayerMobile pm, IdleTaskDefinition def, IdleOrder order, IdleSpotPickInfo pick)
+        public Walk(PlayerMobile pm, IdleTaskDefinition def, IdleOrder order, IdleSpotPickInfo pick, IdleTravelRecord record)
             : base(TimeSpan.FromMilliseconds(TickMs), TimeSpan.FromMilliseconds(TickMs))
         {
             _pm = pm;
+            _record = record;
             _def = def;
             _order = order;
             _map = pm.Map;
@@ -229,6 +272,9 @@ public static class IdleWalker
             _sentAt = _started - 10000;
             _waitUntil = _started;
             _lastKnown = pm.Location;
+
+            // Decided now so the status says how the walk sets off before the first step.
+            WantRun();
         }
 
         private void SetRoute(IReadOnlyList<IdlePointInfo> points, IReadOnlyList<int> teleportLegs)
@@ -257,37 +303,41 @@ public static class IdleWalker
 
         public string Describe()
         {
+            var live = Live();
+            return $"Going to {_spot.Name} ({_spot.Id}): about {live.TilesLeft} tiles to go, " +
+                   $"{IdleRouting.FormatEta(live.EtaSeconds)}. {live.Pace} {_steps} steps taken.";
+        }
+
+        /// <summary>Distance and time left from where the character is now, and how it is moving.</summary>
+        public IdleTravelLive Live()
+        {
             var left = RemainingTiles(out var teleports);
             var pace = IdlePace.For(_pm);
             var eta = IdlePace.EstimateSeconds(left, teleports, pace, true, _running);
+            return new IdleTravelLive(left, eta, _sawRun, PaceText(pace), _steps, (Core.TickCount - _started) / 1000.0);
+        }
 
-            using var sb = ValueStringBuilder.Create();
-            sb.Append($"Going to {_spot.Name} ({_spot.Id}): about {left} tiles to go, {IdleRouting.FormatEta(eta)}. ");
-
+        private string PaceText(IdlePaceState pace)
+        {
             if (_running && _sawRun)
             {
-                sb.Append("Running.");
-            }
-            else if (_running)
-            {
-                // Asked to run, but the server saw a walking step (or none yet).
-                sb.Append(_steps == 0 ? "Setting off at a run." : "Walking: your client did not run when asked.");
-            }
-            else if (_sawRun)
-            {
-                sb.Append($"Asked to walk, but your client is running (Always Run?). {Level(pace)}");
-            }
-            else if (pace.WalkReason != null)
-            {
-                sb.Append($"Walking ({pace.WalkReason}).");
-            }
-            else
-            {
-                sb.Append($"Walking to rest. {Level(pace)} Running again from {Percent(pace.RunAbove, pace.Max)}%.");
+                return "Running.";
             }
 
-            sb.Append($" {_steps} steps taken.");
-            return sb.ToString();
+            if (_running)
+            {
+                // Asked to run, but the server saw a walking step (or none yet).
+                return _steps == 0 ? "Setting off at a run." : "Walking: your client did not run when asked.";
+            }
+
+            if (_sawRun)
+            {
+                return $"Asked to walk, but your client is running (Always Run?). {Level(pace)}";
+            }
+
+            return pace.WalkReason != null
+                ? $"Walking ({pace.WalkReason})."
+                : $"Walking to rest. {Level(pace)} Running again from {Percent(pace.RunAbove, pace.Max)}%.";
         }
 
         private string Level(IdlePaceState pace) =>
@@ -333,13 +383,13 @@ public static class IdleWalker
 
             if (_pm.Deleted || _pm.NetState == null)
             {
-                Finish(null, 0);
+                Finish("LoggedOut", "You lost your connection, so the walk stopped.", 0, false);
                 return;
             }
 
-            if (CheckStopRules(now) is { } reason)
+            if (CheckStopRules(now, out var code) is { } reason)
             {
-                Finish(reason, 0x22);
+                Finish(code, reason, 0x22);
                 return;
             }
 
@@ -352,7 +402,9 @@ public static class IdleWalker
             }
             else if (_pm.Location != _lastKnown && !TryTeleported())
             {
-                Finish($"You were moved away from the route (to {_pm.X}, {_pm.Y}), so the walk stopped.", 0x22);
+                Finish(
+                    "MovedAway", $"You were moved away from the route (to {_pm.X}, {_pm.Y}), so the walk stopped.", 0x22
+                );
                 return;
             }
 
@@ -365,7 +417,9 @@ public static class IdleWalker
             {
                 if (!TryTeleported() && now - _teleportSince > TeleportWaitMs)
                 {
-                    Finish($"The teleporter at {_pm.X}, {_pm.Y} did not move you, so the walk stopped.", 0x22);
+                    Finish(
+                        "TeleporterFailed", $"The teleporter at {_pm.X}, {_pm.Y} did not move you, so the walk stopped.", 0x22
+                    );
                 }
 
                 return;
@@ -398,39 +452,46 @@ public static class IdleWalker
         }
 
         /// <summary>The shared character rules, then the walk's own time limits.</summary>
-        private string CheckStopRules(long now)
+        private string CheckStopRules(long now, out string code)
         {
             switch (IdleRules.CheckCharacter(_pm))
             {
                 case IdleLogoutResult.Dead:
                     {
+                        code = "Died";
                         return "You died, so the walk stopped.";
                     }
                 case IdleLogoutResult.Criminal:
                     {
+                        code = "Criminal";
                         return "You are flagged criminal, so the walk stopped.";
                     }
                 case IdleLogoutResult.InCombat:
                     {
+                        code = "Combat";
                         return "You are fighting or in war mode, so the walk stopped.";
                     }
             }
 
             if (_pm.Map != _map)
             {
+                code = "LeftMap";
                 return "You left the map, so the walk stopped.";
             }
 
             if (!_onTeleporter && now - _lastProgress > _stuckMs)
             {
+                code = "Stuck";
                 return $"You have not moved for {_stuckMs / 1000} seconds at {_pm.X}, {_pm.Y}, so the walk stopped.";
             }
 
             if (now - _started > _limitMs)
             {
+                code = "TooSlow";
                 return $"The walk is taking far longer than expected, so it stopped at {_pm.X}, {_pm.Y}.";
             }
 
+            code = null;
             return null;
         }
 
@@ -452,7 +513,9 @@ public static class IdleWalker
                     return true;
                 }
 
-                Finish($"You were moved away from the route (to {_pm.X}, {_pm.Y}), so the walk stopped.", 0x22);
+                Finish(
+                    "MovedAway", $"You were moved away from the route (to {_pm.X}, {_pm.Y}), so the walk stopped.", 0x22
+                );
                 return false;
             }
 
@@ -509,7 +572,7 @@ public static class IdleWalker
 
             if (StaminaSystem.IsOverloaded(_pm))
             {
-                Finish("You are carrying too much to walk, so the walk stopped.", 0x22);
+                Finish("Overloaded", "You are carrying too much to walk, so the walk stopped.", 0x22);
                 return false;
             }
 
@@ -737,7 +800,7 @@ public static class IdleWalker
             if (++_reroutes > MaxReroutes || IdleRoutes.Get(_map) is not { } routeMap ||
                 routeMap.FindRoutes(_pm.Location, [_goal])[0] is not { } route)
             {
-                Finish($"The way is blocked at {_pm.X}, {_pm.Y}, so the walk stopped.", 0x22);
+                Finish("Blocked", $"The way is blocked at {_pm.X}, {_pm.Y}, so the walk stopped.", 0x22);
                 return false;
             }
 
@@ -793,7 +856,7 @@ public static class IdleWalker
         {
             if (IdleSystem.TryStartTaskAt(_pm, _spot.Id, out var error, _def.Id, _order))
             {
-                Finish($"You arrive at {_spot.Name} and start {_def.Name.ToLowerInvariant()}.", 0x44);
+                Finish(null, $"You arrive at {_spot.Name} and start {_def.Name.ToLowerInvariant()}.", 0x44);
                 return;
             }
 
@@ -801,7 +864,10 @@ public static class IdleWalker
 
             if (here.Status == "Started")
             {
-                Finish($"You arrive near {_spot.Name} and start {_def.Name.ToLowerInvariant()} on a target beside it.", 0x44);
+                Finish(
+                    null, $"You arrive near {_spot.Name} and start {_def.Name.ToLowerInvariant()} on a target beside it.",
+                    0x44
+                );
                 return;
             }
 
@@ -813,24 +879,53 @@ public static class IdleWalker
                 _spot = _spot with { Stand = stand, Target = here.Target };
                 SetRoute([IdlePointInfo.From(_pm.Location), stand], null);
                 _pm.SendMessage(0x3B2, $"{error ?? "The spot cannot be worked."} Walking to a target {here.Distance} tiles away.");
+                _record.Message = $"The spot could not be worked; walking to a target {here.Distance} tiles away.";
+                _record.UpdatedAt = Core.Now;
                 _waitUntil = Core.TickCount + 250;
                 return;
             }
 
-            Finish($"You arrive, but cannot start: {error ?? here.Message}", 0x22);
+            Finish("CannotStart", $"You arrive, but cannot start: {error ?? here.Message}", 0x22);
         }
 
-        public void Finish(string reason, int hue)
+        /// <summary>
+        /// Ends the walk. <paramref name="stopReason"/> null means it arrived and the task started (Working, or Arrived
+        /// when live work did not start); otherwise it is the record's StopReason. <paramref name="tell"/> false keeps
+        /// the player from being messaged (logged out, replaced).
+        /// </summary>
+        public void Finish(string stopReason, string message, int hue, bool tell = true)
         {
             Stop();
             _walks.Remove(_pm);
 
-            if (reason == null)
+            _record.Steps = _steps;
+            _record.ElapsedSeconds = (Core.TickCount - _started) / 1000.0;
+
+            if (stopReason == null)
+            {
+                _record.ReachedSpot = true;
+                _record.StopReason = null;
+                _record.Phase = IdleOnlineWork.IsWorking(_pm) ? "Working" : "Arrived";
+                if (_record.Phase == "Arrived")
+                {
+                    message = "You are at the spot with the task set, but work did not start. [Idle resume starts it.";
+                    hue = 0x3B2;
+                }
+
+                _record.Message = message;
+                _record.UpdatedAt = Core.Now;
+            }
+            else
+            {
+                _record.Stopped(stopReason, message);
+            }
+
+            if (!tell || message == null)
             {
                 return;
             }
 
-            _pm.SendMessage(hue, reason);
+            _pm.SendMessage(hue, message);
 
             using var sb = ValueStringBuilder.Create();
             var took = (Core.TickCount - _started) / 1000.0;

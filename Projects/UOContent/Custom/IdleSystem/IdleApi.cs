@@ -181,6 +181,18 @@ public static class IdleApi
         return ok;
     }
 
+    /// <summary>
+    /// The latest go and work: phase (Planning, Walking, Arrived, Working, Stopped), position, distance and time
+    /// left, the picked spot with its risk, the alternatives, and why it stopped. See <see cref="IdleTravelInfo"/>.
+    /// </summary>
+    public static IdleTravelInfo Travel(PlayerMobile pm) => IdleTravel.Get(pm);
+
+    /// <summary>
+    /// The Resume button: starts work where the character stands if it is at its task's spot, otherwise sets off
+    /// again for the latest go's task. In the world only.
+    /// </summary>
+    public static IdleResumeInfo Resume(PlayerMobile pm) => IdleTravel.Resume(pm);
+
     /// <summary>Ends a walk in progress. False when the character was not walking.</summary>
     public static bool StopWalking(PlayerMobile pm) => IdleWalker.Stop(pm, "You stop walking.");
 

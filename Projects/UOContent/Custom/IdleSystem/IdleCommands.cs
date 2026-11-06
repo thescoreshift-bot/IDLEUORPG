@@ -24,7 +24,8 @@ public static class IdleCommands
         "'here smelt <amount>' and 'here craft ...' do the same for orders. 'near <task>' lists the nearest known spots. " +
         "'check <task>' (or 'check smelt <amount>', 'check craft ...') lists what is missing before going to work. " +
         "'route <task>' shows the spot you would walk to (the nearest on foot, or a safer one a little farther) and the others, with walking distance and time. " +
-        "'go <task>' (or 'go smelt <amount>', 'go craft ...') walks you there and starts the task; 'go' alone shows the walk, 'stop' ends it."
+        "'go <task>' (or 'go smelt <amount>', 'go craft ...') walks you there and starts the task; 'go' alone shows the walk " +
+        "or how the last one ended, 'stop' ends it. 'resume' works here if you are at your task's spot, else sets off again."
     )]
     public static void Idle_OnCommand(CommandEventArgs e)
     {
@@ -105,17 +106,15 @@ public static class IdleCommands
                 }
             case "resume":
                 {
-                    if (IdleOnlineWork.IsWorking(pm))
-                    {
-                        pm.SendMessage("You are already working.");
-                    }
-                    else if (IdleOnlineWork.TryStart(pm, out var error))
+                    // Work here if at the task's spot, otherwise set off again for the latest go.
+                    var resumed = IdleApi.Resume(pm);
+                    if (resumed.Status == "Working")
                     {
                         SendStarted(pm);
                     }
-                    else
+                    else if (resumed.Status == "Failed")
                     {
-                        pm.SendMessage(0x22, error ?? "You cannot work right now.");
+                        pm.SendMessage(0x22, resumed.Message ?? "You cannot work right now.");
                     }
 
                     break;
@@ -407,10 +406,25 @@ public static class IdleCommands
             if (IdleWalker.Describe(pm) is { } walking)
             {
                 pm.SendMessage(0x3F, walking);
+                return;
             }
-            else
+
+            var travel = IdleApi.Travel(pm);
+            if (travel.Phase == "None")
             {
                 pm.SendMessage("You are not walking anywhere. Usage: [Idle go <task>, [Idle go smelt <amount>, [Idle go craft ...");
+                return;
+            }
+
+            pm.SendMessage(0x3F, $"Last go ({travel.TaskName ?? travel.TaskId}): {travel.Phase}.");
+            if (travel.Message != null)
+            {
+                pm.SendMessage(travel.Message);
+            }
+
+            if (travel.CanResume)
+            {
+                pm.SendMessage(0x3B2, "[Idle resume picks it up.");
             }
 
             return;
@@ -850,17 +864,18 @@ public static class IdleCommands
         }
     }
 
-    [Usage("IdleApi <status | checkin> <character name> | near <character name> <task> [count] | here <character name> <task> | check <character name> <task or order> | route <character name> <task or order> | pick <character name> <task or order>")]
+    [Usage("IdleApi <status | checkin> <character name> | near <character name> <task> [count] | here <character name> <task> | check <character name> <task or order> | route <character name> <task or order> | pick <character name> <task or order> | travel <character name> | resume <character name>")]
     [Description(
         "Shows exactly what a phone or web client would get for a character with an idle task, online or offline. " +
         "'checkin' settles the offline time since the character left or was last checked. 'near' and 'here' are the " +
         "spot lookup and work-here calls, from where the character is or logged out ('here' really starts the task). " +
-        "'check' is the preflight checklist; 'route' the walking routes to the nearest spots; 'pick' the spot it would walk to."
+        "'check' is the preflight checklist; 'route' the walking routes to the nearest spots; 'pick' the spot it would walk to. " +
+        "'travel' is the status of its latest go and work; 'resume' is the Resume button (really resumes)."
     )]
     public static void IdleApi_OnCommand(CommandEventArgs e)
     {
         const string usage =
-            "Usage: [IdleApi <status | checkin> <character name> | near <character name> <task> [count] | here <character name> <task> | check <character name> <task or order> | route <character name> <task or order> | pick <character name> <task or order>";
+            "Usage: [IdleApi <status | checkin> <character name> | near <character name> <task> [count] | here <character name> <task> | check <character name> <task or order> | route <character name> <task or order> | pick <character name> <task or order> | travel <character name> | resume <character name>";
 
         if (e.Length < 2)
         {
@@ -870,11 +885,12 @@ public static class IdleCommands
 
         var verb = e.GetString(0).ToLowerInvariant();
         var spotCall = verb is "near" or "here" or "check" or "route" or "pick";
-        var pm = spotCall ? FindPlayer(e.GetString(1)) : IdleSystem.FindPlayerWithTask(e.GetString(1));
+        var anyPlayer = spotCall || verb is "travel" or "resume";
+        var pm = anyPlayer ? FindPlayer(e.GetString(1)) : IdleSystem.FindPlayerWithTask(e.GetString(1));
 
         if (pm == null)
         {
-            e.Mobile.SendMessage(spotCall ? "No player character has that name." : "No character with an idle task has that name.");
+            e.Mobile.SendMessage(anyPlayer ? "No player character has that name." : "No character with an idle task has that name.");
             return;
         }
 
@@ -911,6 +927,16 @@ public static class IdleCommands
             case "pick":
                 {
                     result = IdleApi.PickSpot(pm, task.Id);
+                    break;
+                }
+            case "travel":
+                {
+                    result = IdleApi.Travel(pm);
+                    break;
+                }
+            case "resume":
+                {
+                    result = IdleApi.Resume(pm);
                     break;
                 }
             case "status":

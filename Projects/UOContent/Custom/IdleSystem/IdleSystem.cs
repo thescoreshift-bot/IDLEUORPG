@@ -570,6 +570,7 @@ public class IdleSystem : GenericPersistence
     {
         _states.Remove(pm);
         _pending.Remove(pm);
+        IdleWalker.Forget(pm);
     }
 
     public override void Serialize(IGenericWriter writer)
