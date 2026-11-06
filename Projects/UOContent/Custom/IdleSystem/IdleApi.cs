@@ -170,6 +170,20 @@ public static class IdleApi
     public static IdleSpotPickInfo PickSpot(PlayerMobile pm, string taskId, int alternatives = 4) =>
         IdleRouting.Pick(pm, taskId, Math.Clamp(alternatives, 0, 19));
 
+    /// <summary>
+    /// "Go and work": checks the character, walks it (in the world) to the picked spot, and starts the task there.
+    /// False with the reasons when it cannot set off; the walk's progress and end are told to the player in game.
+    /// </summary>
+    public static bool Go(PlayerMobile pm, string taskId, IdleOrder order, out IReadOnlyList<string> problems)
+    {
+        var ok = IdleWalker.TryGo(pm, taskId, order, out var list);
+        problems = list;
+        return ok;
+    }
+
+    /// <summary>Ends a walk in progress. False when the character was not walking.</summary>
+    public static bool StopWalking(PlayerMobile pm) => IdleWalker.Stop(pm, "You stop walking.");
+
     /// <summary>The Focus button: starts Focus for the character's task, online or offline.</summary>
     public static IdleFocusInfo ActivateFocus(PlayerMobile pm, out string message)
     {

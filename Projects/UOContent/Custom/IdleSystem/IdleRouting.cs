@@ -15,7 +15,9 @@ public record IdleRouteInfo(
     // Safest first: Safe (guarded spot, guarded all the way), UnguardedRoute (guarded spot, part of the way
     // unguarded), UnguardedSpot (the spot is outside guard zones), HostileSpot (hostile spawners near the spot).
     string Risk,
-    IReadOnlyList<IdlePointInfo> Waypoints
+    IReadOnlyList<IdlePointInfo> Waypoints,
+    // Each index i where stepping onto waypoint i is a teleporter that lands on waypoint i + 1.
+    IReadOnlyList<int> TeleportLegs
 );
 
 /// <summary>
@@ -111,7 +113,7 @@ public static class IdleRouting
             found.Add(
                 new IdleRouteInfo(
                     spot, route.Tiles, route.EtaSeconds, route.Teleports, route.UnguardedTiles,
-                    _risks[RiskOf(spot, goals[i], map, route.UnguardedTiles)], waypoints
+                    _risks[RiskOf(spot, goals[i], map, route.UnguardedTiles)], waypoints, route.TeleportLegs
                 )
             );
         }

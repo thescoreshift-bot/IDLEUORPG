@@ -10,8 +10,12 @@ namespace Server.Custom.Idle;
 /// <summary>
 /// A walking route found on the coarse route map. <see cref="Waypoints"/> runs from the start, through the crossing
 /// points between map cells (a teleporter is a pair of points with no walking between them), to the goal.
+/// <paramref name="TeleportLegs"/> holds each index i where stepping onto waypoint i is a teleporter that lands on
+/// waypoint i + 1.
 /// </summary>
-public sealed record IdleRoute(int Tiles, int Teleports, int UnguardedTiles, IReadOnlyList<Point3D> Waypoints)
+public sealed record IdleRoute(
+    int Tiles, int Teleports, int UnguardedTiles, IReadOnlyList<Point3D> Waypoints, IReadOnlyList<int> TeleportLegs
+)
 {
     /// <summary>
     /// A walking step every 400 ms (the client's walk pace), plus about 10% for turning and doors, and a second per
@@ -335,6 +339,7 @@ public sealed class IdleRouteMap
         edges.Reverse();
 
         var points = new List<Point3D>(edges.Count * 2 + 2) { from };
+        var teleportLegs = new List<int>();
         var tiles = 0;
         var teleports = 0;
         var unguarded = 0;
@@ -356,6 +361,7 @@ public sealed class IdleRouteMap
             if ((_edgeFlags[e] & TeleportFlag) != 0)
             {
                 teleports++;
+                teleportLegs.Add(points.Count - 1);
                 points.Add(_edgeTo[e]);
                 last = _edgeTo[e];
             }
@@ -366,7 +372,7 @@ public sealed class IdleRouteMap
         }
 
         WalkTo(goal);
-        return new IdleRoute(tiles, teleports, unguarded, points);
+        return new IdleRoute(tiles, teleports, unguarded, points, teleportLegs);
     }
 
     /// <summary>Steps of a straight segment outside guard protection, sampled every few tiles.</summary>

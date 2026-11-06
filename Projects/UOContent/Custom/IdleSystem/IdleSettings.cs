@@ -66,6 +66,18 @@ public class IdleTravelSettings
     /// reached through fewer unguarded tiles. 0 = always the nearest on foot.
     /// </summary>
     public int SafeDetourTiles { get; set; } = 40;
+
+    /// <summary>How long the walker waits for the client to take a step before asking again.</summary>
+    public double StepTimeoutSeconds { get; set; } = 1.5;
+
+    /// <summary>
+    /// Times the walker asks the client for one step before the server moves the character itself (the step is still
+    /// checked like a normal one).
+    /// </summary>
+    public int StepTries { get; set; } = 3;
+
+    /// <summary>The walk stops when the character has not moved for this long.</summary>
+    public double StuckSeconds { get; set; } = 20;
 }
 
 /// <summary>[IdleGenSpots: how the world scan picks spots.</summary>

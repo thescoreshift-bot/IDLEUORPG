@@ -16,14 +16,15 @@ public static class IdleCommands
         CommandSystem.Register("IdleApi", AccessLevel.GameMaster, IdleApi_OnCommand);
     }
 
-    [Usage("Idle [stop | status | resume | list | recipes [filter] | here <task> | near <task> [count] | check <task or order> | route <task or order> | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]")]
+    [Usage("Idle [stop | status | resume | list | recipes [filter] | here <task> | near <task> [count] | check <task or order> | route <task or order> | go <task or order> | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]")]
     [Description(
         "Choose the spot your character works while you are logged out. With no argument, target the spot. " +
         "smelt/craft start an order where you stand; 'at <location>' can be followed by the same order. " +
         "'here <task>' starts the task at the nearest target within reach or says where the nearest one is; " +
         "'here smelt <amount>' and 'here craft ...' do the same for orders. 'near <task>' lists the nearest known spots. " +
         "'check <task>' (or 'check smelt <amount>', 'check craft ...') lists what is missing before going to work. " +
-        "'route <task>' shows the spot you would walk to (the nearest on foot, or a safer one a little farther) and the others, with walking distance and time."
+        "'route <task>' shows the spot you would walk to (the nearest on foot, or a safer one a little farther) and the others, with walking distance and time. " +
+        "'go <task>' (or 'go smelt <amount>', 'go craft ...') walks you there and starts the task; 'go' alone shows the walk, 'stop' ends it."
     )]
     public static void Idle_OnCommand(CommandEventArgs e)
     {
@@ -48,7 +49,18 @@ public static class IdleCommands
                 }
             case "stop":
                 {
+                    // A walk in progress stops first; the task, if any, stays until the next [Idle stop.
+                    if (IdleWalker.Stop(pm, "You stop walking."))
+                    {
+                        break;
+                    }
+
                     pm.SendMessage(IdleSystem.StopTask(pm) ? "Your idle task has been cleared." : "You have no idle task.");
+                    break;
+                }
+            case "go":
+                {
+                    Go(pm, e);
                     break;
                 }
             case "status":
@@ -116,7 +128,7 @@ public static class IdleCommands
             default:
                 {
                     pm.SendMessage(
-                        "Usage: [Idle [stop | status | resume | list | recipes [filter] | here <task> | near <task> [count] | check <task or order> | route <task or order> | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]"
+                        "Usage: [Idle [stop | status | resume | list | recipes [filter] | here <task> | near <task> [count] | check <task or order> | route <task or order> | go <task or order> | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]"
                     );
                     break;
                 }
@@ -385,6 +397,39 @@ public static class IdleCommands
         foreach (var r in info.Alternatives)
         {
             SendRoute(pm, $"{++i}", r, 0x3B2);
+        }
+    }
+
+    private static void Go(PlayerMobile pm, CommandEventArgs e)
+    {
+        if (e.Length < 2)
+        {
+            if (IdleWalker.Describe(pm) is { } walking)
+            {
+                pm.SendMessage(0x3F, walking);
+            }
+            else
+            {
+                pm.SendMessage("You are not walking anywhere. Usage: [Idle go <task>, [Idle go smelt <amount>, [Idle go craft ...");
+            }
+
+            return;
+        }
+
+        if (!TryResolveTask(pm, pm, e, 1, out var def, out var order))
+        {
+            return;
+        }
+
+        if (IdleWalker.TryGo(pm, def.Id, order, out var problems))
+        {
+            return;
+        }
+
+        pm.SendMessage(0x22, $"You cannot set off for {def.Name.ToLowerInvariant()}:");
+        foreach (var problem in problems)
+        {
+            pm.SendMessage(0x22, $"  - {problem}");
         }
     }
 
