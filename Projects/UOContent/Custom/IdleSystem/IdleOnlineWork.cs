@@ -243,19 +243,20 @@ public static class IdleOnlineWork
 
         private (string, IdleLogoutResult) GetBrokenRule()
         {
-            if (!_pm.Alive)
+            switch (IdleRules.CheckCharacter(_pm))
             {
-                return ("You have died.", IdleLogoutResult.Dead);
-            }
-
-            if (_pm.Criminal)
-            {
-                return ("You stop working: you are a criminal.", IdleLogoutResult.Criminal);
-            }
-
-            if (_pm.Warmode || IdleSystem.IsInCombat(_pm))
-            {
-                return ("You stop working to fight.", IdleLogoutResult.InCombat);
+                case IdleLogoutResult.Dead:
+                    {
+                        return ("You have died.", IdleLogoutResult.Dead);
+                    }
+                case IdleLogoutResult.Criminal:
+                    {
+                        return ("You stop working: you are a criminal.", IdleLogoutResult.Criminal);
+                    }
+                case IdleLogoutResult.InCombat:
+                    {
+                        return ("You stop working to fight.", IdleLogoutResult.InCombat);
+                    }
             }
 
             var target = _state.Target;

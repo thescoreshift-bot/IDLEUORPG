@@ -231,7 +231,13 @@ public class CraftIdleHandler : IdleTaskHandler
 
         if (tools.Count == 0)
         {
-            error = "You need a working tool for that craft in your hand or backpack.";
+            error = system switch
+            {
+                DefBlacksmithy => "You need a smith's hammer or tongs in your hand or backpack.",
+                DefTailoring   => "You need a sewing kit in your hand or backpack.",
+                DefTinkering   => "You need tinker's tools in your hand or backpack.",
+                _              => "You need a working tool for that craft in your hand or backpack."
+            };
             return false;
         }
 

@@ -16,12 +16,13 @@ public static class IdleCommands
         CommandSystem.Register("IdleApi", AccessLevel.GameMaster, IdleApi_OnCommand);
     }
 
-    [Usage("Idle [stop | status | resume | list | recipes [filter] | here <task> | near <task> [count] | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]")]
+    [Usage("Idle [stop | status | resume | list | recipes [filter] | here <task> | near <task> [count] | check <task or order> | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]")]
     [Description(
         "Choose the spot your character works while you are logged out. With no argument, target the spot. " +
         "smelt/craft start an order where you stand; 'at <location>' can be followed by the same order. " +
         "'here <task>' starts the task at the nearest target within reach or says where the nearest one is; " +
-        "'here smelt <amount>' and 'here craft ...' do the same for orders. 'near <task>' lists the nearest known spots."
+        "'here smelt <amount>' and 'here craft ...' do the same for orders. 'near <task>' lists the nearest known spots. " +
+        "'check <task>' (or 'check smelt <amount>', 'check craft ...') lists what is missing before going to work."
     )]
     public static void Idle_OnCommand(CommandEventArgs e)
     {
@@ -69,6 +70,11 @@ public static class IdleCommands
                     SendNearest(pm, e);
                     break;
                 }
+            case "check" when e.Length > 1:
+                {
+                    SendPreflight(pm, e);
+                    break;
+                }
             case "at" when e.Length > 1:
                 {
                     StartAt(pm, e);
@@ -104,7 +110,7 @@ public static class IdleCommands
             default:
                 {
                     pm.SendMessage(
-                        "Usage: [Idle [stop | status | resume | list | recipes [filter] | here <task> | near <task> [count] | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]"
+                        "Usage: [Idle [stop | status | resume | list | recipes [filter] | here <task> | near <task> [count] | check <task or order> | at <location> [order] | smelt <amount> | craft <recipe> <amount> [material]]"
                     );
                     break;
                 }
@@ -265,6 +271,85 @@ public static class IdleCommands
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Reads a task name, or an order verb with its order ("smelt 50", "craft longsword 5 iron"), from argument
+    /// <paramref name="start"/>. <paramref name="pm"/> is the character the order is for; problems go to <paramref name="from"/>.
+    /// </summary>
+    private static bool TryResolveTask(
+        Mobile from, PlayerMobile pm, CommandEventArgs e, int start, out IdleTaskDefinition def, out IdleOrder order
+    )
+    {
+        def = null;
+        order = null;
+
+        if (e.Length <= start)
+        {
+            SendTaskNames(from);
+            return false;
+        }
+
+        var arg = e.GetString(start).ToLowerInvariant();
+        if (arg is not ("smelt" or "craft"))
+        {
+            def = FindTask(arg);
+            if (def == null)
+            {
+                SendTaskNames(from);
+            }
+
+            return def != null;
+        }
+
+        if (!TryParseOrder(e, start, out var verb, out order, out var error))
+        {
+            from.SendMessage(0x22, error);
+            return false;
+        }
+
+        def = IdlePreflight.FindTaskForOrder(pm, KindForVerb(verb), order);
+        if (def == null)
+        {
+            from.SendMessage(0x22, "That idle task is not available.");
+        }
+
+        return def != null;
+    }
+
+    private static void SendPreflight(PlayerMobile pm, CommandEventArgs e)
+    {
+        if (!TryResolveTask(pm, pm, e, 1, out var def, out var order))
+        {
+            return;
+        }
+
+        var info = IdlePreflight.Run(pm, def.Id, order);
+
+        if (info.Ready)
+        {
+            pm.SendMessage(0x3F, $"{info.TaskName}: ready to go.");
+        }
+        else
+        {
+            pm.SendMessage(0x22, $"{info.TaskName}: not ready.");
+        }
+
+        foreach (var line in info.Checks)
+        {
+            if (!line.Ok)
+            {
+                pm.SendMessage(0x22, $"  Missing - {line.Check}: {line.Message}");
+            }
+            else if (!line.Blocking)
+            {
+                pm.SendMessage(0x35, $"  Note - {line.Check}: {line.Message}");
+            }
+            else
+            {
+                pm.SendMessage(0x3B2, $"  OK - {line.Check}: {line.Message}");
+            }
+        }
     }
 
     private static void SendTaskNames(Mobile m)
@@ -638,16 +723,17 @@ public static class IdleCommands
         }
     }
 
-    [Usage("IdleApi <status | checkin> <character name> | near <character name> <task> [count] | here <character name> <task>")]
+    [Usage("IdleApi <status | checkin> <character name> | near <character name> <task> [count] | here <character name> <task> | check <character name> <task or order>")]
     [Description(
         "Shows exactly what a phone or web client would get for a character with an idle task, online or offline. " +
         "'checkin' settles the offline time since the character left or was last checked. 'near' and 'here' are the " +
-        "spot lookup and work-here calls, from where the character is or logged out ('here' really starts the task)."
+        "spot lookup and work-here calls, from where the character is or logged out ('here' really starts the task). " +
+        "'check' is the preflight checklist."
     )]
     public static void IdleApi_OnCommand(CommandEventArgs e)
     {
         const string usage =
-            "Usage: [IdleApi <status | checkin> <character name> | near <character name> <task> [count] | here <character name> <task>";
+            "Usage: [IdleApi <status | checkin> <character name> | near <character name> <task> [count] | here <character name> <task> | check <character name> <task or order>";
 
         if (e.Length < 2)
         {
@@ -656,7 +742,7 @@ public static class IdleCommands
         }
 
         var verb = e.GetString(0).ToLowerInvariant();
-        var spotCall = verb is "near" or "here";
+        var spotCall = verb is "near" or "here" or "check";
         var pm = spotCall ? FindPlayer(e.GetString(1)) : IdleSystem.FindPlayerWithTask(e.GetString(1));
 
         if (pm == null)
@@ -666,9 +752,9 @@ public static class IdleCommands
         }
 
         IdleTaskDefinition task = null;
-        if (spotCall && (e.Length < 3 || (task = FindTask(e.GetString(2))) == null))
+        IdleOrder order = null;
+        if (spotCall && !TryResolveTask(e.Mobile, pm, e, 2, out task, out order))
         {
-            SendTaskNames(e.Mobile);
             return;
         }
 
@@ -682,7 +768,12 @@ public static class IdleCommands
                 }
             case "here":
                 {
-                    result = IdleApi.WorkHere(pm, task.Id);
+                    result = IdleApi.WorkHere(pm, task.Id, order);
+                    break;
+                }
+            case "check":
+                {
+                    result = IdleApi.Preflight(pm, task.Id, order);
                     break;
                 }
             case "status":

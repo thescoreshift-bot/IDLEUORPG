@@ -194,7 +194,7 @@ public class HarvestIdleHandler : IdleTaskHandler
 
         if (tools.Count == 0)
         {
-            error = "You need a working tool for this task in your backpack or hands.";
+            error = $"You need {ToolName(system)} in your backpack or hands.";
             return false;
         }
 
@@ -214,6 +214,16 @@ public class HarvestIdleHandler : IdleTaskHandler
         var (system, definition) = Get(def);
         return new HarvestIdleRun(pm, def, system, definition, target, FindTools(pm, system));
     }
+
+    /// <summary>What to tell a player who has no tool for the system, e.g. "a pickaxe or shovel".</summary>
+    public static string ToolName(HarvestSystem system) =>
+        system switch
+        {
+            Mining        => "a pickaxe or shovel",
+            Lumberjacking => "an axe or hatchet",
+            Fishing       => "a fishing pole",
+            _             => "a working tool for this task"
+        };
 
     /// <summary>Held tools first (the one online harvesting would wear), then backpack.</summary>
     public static List<Item> FindTools(PlayerMobile pm, HarvestSystem system)

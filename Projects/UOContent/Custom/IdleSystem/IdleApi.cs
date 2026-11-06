@@ -137,11 +137,12 @@ public static class IdleApi
     }
 
     /// <summary>
-    /// "While you were away" for a client that checks in without the game: settles the offline time since the
-    /// character left (or since the last check-in) and returns the summary. The next check-in or login only settles
-    /// time after this one. Returns null with a message when there is nothing to settle: the character is in the
-    /// world (live totals are in <see cref="GetStatus"/>), has no eligible offline work, or too little time passed.
+    /// The checklist before going to work: ready yes/no plus every check with what is missing (a tool, the order's
+    /// materials, room to carry). Changes nothing.
     /// </summary>
+    public static IdlePreflightInfo Preflight(PlayerMobile pm, string taskId, IdleOrder order = null) =>
+        IdlePreflight.Run(pm, taskId, order);
+
     /// <summary>
     /// "Work here": starts the task where the character is (or logged out) if a target is within reach; otherwise says
     /// where the nearest target or known spot is. Never moves the character.
@@ -162,6 +163,12 @@ public static class IdleApi
         return IdleFocus.GetInfo(pm);
     }
 
+    /// <summary>
+    /// "While you were away" for a client that checks in without the game: settles the offline time since the
+    /// character left (or since the last check-in) and returns the summary. The next check-in or login only settles
+    /// time after this one. Returns null with a message when there is nothing to settle: the character is in the
+    /// world (live totals are in <see cref="GetStatus"/>), has no eligible offline work, or too little time passed.
+    /// </summary>
     public static IdleSummaryInfo CheckIn(PlayerMobile pm, out string message)
     {
         var state = IdleSystem.GetState(pm);
